@@ -18,6 +18,8 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from harvey.language import fold
+
 logger = logging.getLogger("harvey.mail")
 
 NATIVE_PROVIDERS = ("gmail", "smtp")
@@ -59,11 +61,30 @@ def looks_like_bounce(from_email: str, subject: str) -> bool:
     return any(m in f for m in BOUNCE_SENDERS) or any(m in s for m in BOUNCE_SUBJECTS)
 
 
-def outreach_footer(email_cfg) -> str:
+def _opt_out_line(email_cfg, language: str) -> str:
+    """The opt-out line in the prospect's language, else the English one."""
+    english = (getattr(email_cfg, "opt_out_line", "") or "").strip()
+    if language == "sq":
+        return (getattr(email_cfg, "opt_out_line_sq", "") or "").strip() or english
+    return english
+
+
+def outreach_footer(email_cfg, language: str = "en") -> str:
     """Signature plus opt-out line: first emails and follow-ups."""
+    parts = (
+        (getattr(email_cfg, "signature", "") or "").strip(),
+        _opt_out_line(email_cfg, language),
+    )
+    return "\n".join(p for p in parts if p)
+
+
+def footer_to_strip(email_cfg) -> str:
+    """Everything we may have put under an email, in every language: when
+    reading a reply, all of it is ours and none of it is the prospect's."""
     parts = (
         getattr(email_cfg, "signature", "") or "",
         getattr(email_cfg, "opt_out_line", "") or "",
+        getattr(email_cfg, "opt_out_line_sq", "") or "",
     )
     return "\n".join(p.strip() for p in parts if p.strip())
 
@@ -83,9 +104,10 @@ def with_footer(body: str, footer: str) -> str:
 
 
 def _norm_line(line: str) -> str:
-    """A line as compared with our footer: case, spacing and quote marks ignored."""
+    """A line as compared with our footer: case, spacing, quote marks and
+    Albanian ë/ç (some clients flatten them to e/c) ignored."""
     line = line.replace("’", "'").replace("‘", "'")
-    return " ".join(line.split()).casefold()
+    return fold(" ".join(line.split()).casefold())
 
 
 def _drop_footer_lines(lines: list[str], footer: str) -> list[str]:

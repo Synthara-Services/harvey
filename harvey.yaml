@@ -54,6 +54,7 @@ channels:
     max_bounce_rate: 0.05       # pause all sending if bounces exceed this
     signature: ""               # appended to every gmail/smtp email: name, company, site, address
     opt_out_line: ""            # under the signature on first emails and follow-ups, never on replies
+    opt_out_line_sq: ""         # the same line in Albanian, for prospects in Albania or Kosovo
   linkedin:
     enabled: true
     max_daily_connections: 20

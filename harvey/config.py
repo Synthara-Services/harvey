@@ -92,6 +92,8 @@ class EmailChannelConfig(BaseModel):
     # One line under the signature on first emails and follow-ups only.
     # Replies to someone who wrote back carry the signature alone.
     opt_out_line: str = ""
+    # The same line in Albanian, for prospects in Albania or Kosovo.
+    opt_out_line_sq: str = ""
 
     @field_validator("max_daily_sends")
     @classmethod

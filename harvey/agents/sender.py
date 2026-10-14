@@ -26,6 +26,7 @@ from harvey.integrations.mail_provider import (
     outreach_footer,
     with_footer,
 )
+from harvey.language import language_for_country
 from harvey.state import StateManager
 
 logger = logging.getLogger("harvey.sender")
@@ -361,7 +362,6 @@ class Sender:
         )
         initial_status = "pending_review" if require_approval else "approved"
         allow_risky = getattr(self.config.channels.email, "send_to_risky", False)
-        footer = outreach_footer(self.config.channels.email)
         sendable_email = (
             SENDABLE_EMAIL_STATUSES_WITH_RISKY if allow_risky
             else SENDABLE_EMAIL_STATUSES
@@ -385,6 +385,11 @@ class Sender:
                 skipped += 1
                 continue
             seen_emails.add(email)
+            # The opt-out line in the prospect's language, the same one the
+            # writer used for the batch.
+            footer = outreach_footer(
+                self.config.channels.email, language_for_country(prospect.country)
+            )
 
             cumulative_days = 0
             for step in campaign.sequence:
