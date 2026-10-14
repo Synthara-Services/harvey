@@ -39,7 +39,7 @@ from harvey.brain import Brain
 from harvey.config import HarveyConfig, EnvConfig
 from harvey.integrations.email_finder import find_email
 from harvey.integrations.linkedin import LinkedInAutomation
-from harvey.language import country_from_evidence
+from harvey.language import country_from_evidence, fold
 from harvey.models.company import Company
 from harvey.models.prospect import Prospect
 from harvey.state import StateManager
@@ -48,6 +48,47 @@ logger = logging.getLogger("harvey.scout")
 
 # Max queries per cycle to avoid rate limits
 MAX_QUERIES_PER_CYCLE = 3
+# Words that make a "name" a title or a phrase instead of a person: a
+# search snippet that starts "As Founder of ..." or "Tourism Entrepreneur"
+# must never become a prospect. Compared folded and lowercase. Countries
+# only, not cities: Shkodra and Vlora are surnames too.
+NOT_NAME_WORDS = frozenset({
+    "a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "or",
+    "the", "to", "with", "dhe", "ne", "per", "te",
+    "assistant", "board", "business", "ceo", "cfo", "chair", "chairman", "co",
+    "cofounder", "consultant", "coo", "cto", "designer", "developer", "director",
+    "engineer", "entrepreneur", "executive", "founder", "freelancer", "general",
+    "guide", "head", "interpreter", "junior", "lawyer", "lead", "manager",
+    "managing", "marketing", "member", "officer", "owner", "partner",
+    "president", "professional", "sales", "senior", "specialist", "staff",
+    "student", "team", "translator",
+    "agency", "agencies", "company", "consulting", "dmc", "group", "hotel",
+    "llc", "ltd", "operator", "operators", "restaurant", "services", "shpk",
+    "solutions", "studio", "tour", "tours", "tourism", "travel",
+    "albania", "albanian", "austria", "balkan", "balkans", "deutschland",
+    "europe", "germany", "italia", "italy", "kosova", "kosove", "kosovo",
+    "macedonia", "montenegro", "osterreich", "schweiz", "serbia",
+    "shqiperi", "shqiperia", "suisse", "svizzera", "switzerland",
+})
+_NAME_PART_RE = re.compile(r"[^\W\d_]+(?:[.'’\- ][^\W\d_]+)*\.?")
+
+
+def looks_like_person_name(first: str, last: str) -> bool:
+    """True when first and last read as a person's name.
+
+    Letters in any alphabet (Gëzim, Çela, Miljević), each part at least two
+    letters, and no word that is a title, a function word or a place.
+    """
+    for part in (first, last):
+        part = (part or "").strip()
+        if len(part) < 2 or not _NAME_PART_RE.fullmatch(part):
+            return False
+        words = re.split(r"[\s\-.'’]+", fold(part))
+        if any(w in NOT_NAME_WORDS for w in words if w):
+            return False
+    return True
+
+
 # Settings key counting the scout's Serper searches on one day.
 SERPER_SEARCHES_KEY = "scout_serper_searches:{day}"
 # Delay between search requests (seconds)
@@ -153,7 +194,9 @@ class Scout:
         # Job boards first: hiring is the strongest intent signal, and the
         # strategy self-skips when python-jobspy isn't installed.
         strategies.append(("hiring_boards", self._prospect_via_hiring_boards))
-        strategies.append(("profile_search", self._prospect_via_profile_search))
+        # No LinkedIn profile search (_prospect_via_profile_search): on
+        # 2026-10-14, 15 profiles from 3 searches named no company we know,
+        # so none could get an email, and every search cost a Serper credit.
         strategies.append(("company_discovery", self._prospect_via_company_discovery))
 
         for name, strategy in strategies:
@@ -1896,16 +1939,18 @@ Respond ONLY with the JSON array."""
 
         Prefers the snippet (real cased names) and falls back to the URL slug.
         """
-        # 1) Snippet often starts with "First Last - Title at Company".
+        # 1) Snippet often starts with "First Last - Title at Company", but
+        # just as often with a phrase ("As Founder of ...").
         if snippet:
             name_match = re.match(
-                r"^\s*([A-Z][a-z]+)\s+([A-Z][a-z'\-]+)", snippet.strip()
+                r"^\s*([^\W\d_][^\W\d_'\-]+)\s+([^\W\d_][^\W\d_'\-]+)",
+                snippet.strip(),
             )
             if name_match:
-                return {
-                    "first_name": name_match.group(1),
-                    "last_name": name_match.group(2),
-                }
+                first, last = name_match.group(1), name_match.group(2)
+                if (first[0].isupper() and last[0].isupper()
+                        and looks_like_person_name(first, last)):
+                    return {"first_name": first, "last_name": last}
 
         # 2) Fall back to the URL slug.
         match = re.search(r"/in/([\w][\w-]+)", url)
@@ -1918,9 +1963,9 @@ Respond ONLY with the JSON array."""
             # Drop pure-numeric noise tokens.
             parts = [p for p in parts if not p.isdigit()]
             if len(parts) >= 2:
-                return {
-                    "first_name": parts[0].title(),
-                    "last_name": " ".join(p.title() for p in parts[1:]),
-                }
+                first = parts[0].title()
+                last = " ".join(p.title() for p in parts[1:])
+                if looks_like_person_name(first, last):
+                    return {"first_name": first, "last_name": last}
 
         return None
