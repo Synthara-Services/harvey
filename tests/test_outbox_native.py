@@ -349,3 +349,164 @@ async def test_inbound_dedup(state):
     await handler._run_native()   # same message again → ignored via dedup
     second = await state.get_conversations_by_status("closed")
     assert len(first) == len(second) == 1
+
+
+# ── footer and quoted replies ──
+
+SIGNATURE = (
+    "Jane Roe\n"
+    "Founder, Example Co\n"
+    "example.com\n"
+    "1 Example Street, Tirana, Albania"
+)
+OPT_OUT_LINE = "Not relevant for you? Just say so and I won't write again."
+FOOTER = SIGNATURE + "\n" + OPT_OUT_LINE
+
+
+def use_footer(monkeypatch):
+    monkeypatch.setattr(Cfg.channels.email, "signature", SIGNATURE, raising=False)
+    monkeypatch.setattr(Cfg.channels.email, "opt_out_line", OPT_OUT_LINE, raising=False)
+
+# The reply that exposed the bug: an interested answer above a quoted copy
+# of our email whose footer still carried an opt-out phrase.
+THURSDAY_REPLY = (
+    "Sounds interesting, can we talk Thursday?\n\n"
+    "On Wed, 14 Oct 2026 at 10:02, Jane Roe <jane@example.com> wrote:\n"
+    "> Hi Jane, quick question about your booking flow.\n"
+    "> Jane Roe\n"
+    "> Founder, Example Co\n"
+    '> Not relevant for you? Reply "remove me" and I won\'t write again.\n'
+)
+QUOTE_ONLY = THURSDAY_REPLY.split("\n\n", 1)[1]
+
+
+@pytest.mark.asyncio
+async def test_staged_body_carries_footer_and_is_exactly_what_sends(state, monkeypatch):
+    use_footer(monkeypatch)
+    pid = await seed_prospect(state)
+    await seed_campaign(state, [pid])
+    sender = make_sender(state, FakeProvider(), require_approval=True)
+    await sender._run_native()
+
+    pending = await state.get_outbox(status="pending_review")
+    step1 = next(i for i in pending if i["step"] == 1)
+    step2 = next(i for i in pending if i["step"] == 2)
+    assert step1["body"] == "Body for Acme. Question?\n\n" + FOOTER
+    assert step2["body"] == "Another angle Jane.\n\n" + FOOTER
+
+    await state.approve_outbox(step1["id"])
+    await sender._drain_due()
+    assert sender.provider.sent[0]["body"] == step1["body"]
+
+
+@pytest.mark.asyncio
+async def test_handler_reply_carries_the_signature_without_the_opt_out_line(state, monkeypatch):
+    use_footer(monkeypatch)
+    await seed_prospect(state, status="contacted")
+    provider = FakeProvider()
+    provider.inbound = [InboundMessage(
+        provider_id="in1", from_email="jane@acme.com",
+        subject="Re: hi", body="What would a first version cost?",
+    )]
+    handler = make_handler(state, provider, intent="question")
+    await handler._run_native()
+
+    replies = [i for i in await state.get_outbox() if i["kind"] == "reply"]
+    assert len(replies) == 1
+    assert replies[0]["body"] == "Sure, happy to help.\n\n" + SIGNATURE
+    assert OPT_OUT_LINE not in replies[0]["body"]
+
+
+class WriterBrain(StubBrain):
+    async def think_json(self, prompt, **_k):
+        return {"subject": "booking flow", "body": "Saw Acme books by phone. Worth a look?"}
+
+
+@pytest.mark.asyncio
+async def test_personal_first_email_carries_signature_and_opt_out_line(state, monkeypatch):
+    # The writer stages a per-prospect email 1 itself, ahead of the sender.
+    from harvey.agents.writer import Writer
+    use_footer(monkeypatch)
+    pid = await seed_prospect(state)
+    campaign = await seed_campaign(state, [pid])
+    writer = Writer(brain=WriterBrain(), state=state, config=Cfg())
+    writer.skills = ""
+    await writer._personalize_first_emails(campaign.id, [await state.get_prospect(pid)])
+
+    staged = await state.get_outbox(status="pending_review")
+    assert [i["body"] for i in staged] == ["Saw Acme books by phone. Worth a look?\n\n" + FOOTER]
+
+
+@pytest.mark.asyncio
+async def test_quoted_opt_out_phrase_does_not_opt_out_an_interested_reply(state, monkeypatch):
+    use_footer(monkeypatch)
+    pid = await seed_prospect(state, status="contacted")
+    provider = FakeProvider()
+    provider.inbound = [InboundMessage(
+        provider_id="in1", from_email="jane@acme.com",
+        subject="Re: hi", body=THURSDAY_REPLY,
+    )]
+    handler = make_handler(state, provider, intent="interested")
+    await handler._run_native()
+
+    assert (await state.get_prospect(pid)).status != "opted_out"
+    convo = (await state.get_conversations_by_status("open"))[0]
+    assert convo.intent == "interested"
+    assert convo.thread[-1].content == "Sounds interesting, can we talk Thursday?"
+
+
+@pytest.mark.asyncio
+async def test_opt_out_above_the_quote_is_still_honored(state, monkeypatch):
+    use_footer(monkeypatch)
+    pid = await seed_prospect(state, status="contacted")
+    provider = FakeProvider()
+    provider.inbound = [InboundMessage(
+        provider_id="in1", from_email="jane@acme.com", subject="Re: hi",
+        body="Please remove me from your list.\n\n" + QUOTE_ONLY,
+    )]
+    handler = make_handler(state, provider, intent="interested")
+    await handler._run_native()
+
+    assert (await state.get_prospect(pid)).status == "opted_out"
+
+
+@pytest.mark.asyncio
+async def test_reply_with_nothing_above_the_quote_goes_to_a_human(state):
+    await seed_prospect(state, status="contacted")
+    provider = FakeProvider()
+    provider.inbound = [InboundMessage(
+        provider_id="in1", from_email="jane@acme.com",
+        subject="Re: hi", body=QUOTE_ONLY,
+    )]
+    handler = make_handler(state, provider, intent="interested")
+    await handler._run_native()
+
+    convo = (await state.get_conversations_by_status("needs_human"))[0]
+    assert convo.intent == "escalate"
+    assert [i for i in await state.get_outbox() if i["kind"] == "reply"] == []
+
+
+def test_cli_outbox_prints_the_full_body(tmp_path, monkeypatch, capsys):
+    import argparse
+    import asyncio
+
+    import harvey.state
+    from harvey.cli import cmd_outbox
+
+    db_path = str(tmp_path / "cli.db")
+
+    async def seed():
+        sm = StateManager(db_path)
+        await sm.init_db()
+        await sm.add_outbox_item(
+            prospect_id="p1", to_email="jane@acme.com", subject="s",
+            body="A long first paragraph. " * 12 + "\n\n" + FOOTER,
+            send_at=_now_iso(), status="pending_review", campaign_id="c1", step=1,
+        )
+
+    asyncio.run(seed())
+    monkeypatch.setattr(harvey.state, "StateManager", lambda *a, **k: StateManager(db_path))
+    cmd_outbox(argparse.Namespace(approve_all=False, approve=None, reject=None))
+
+    out = capsys.readouterr().out
+    assert "Not relevant for you? Just say so and I won't write again." in out

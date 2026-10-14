@@ -52,6 +52,8 @@ channels:
     require_approval: true      # native providers: emails wait in the Outbox
     send_to_risky: false        # also send to catch-all domains (off = safest)
     max_bounce_rate: 0.05       # pause all sending if bounces exceed this
+    signature: ""               # appended to every gmail/smtp email: name, company, site, address
+    opt_out_line: ""            # under the signature on first emails and follow-ups, never on replies
   linkedin:
     enabled: true
     max_daily_connections: 20
