@@ -89,8 +89,10 @@ async def decide_next_action(
     if summary is None:
         summary = await state.get_state_summary()
 
-    prospects = summary.get("prospects") or {}
-    new_prospects = prospects.get("new", 0) if isinstance(prospects, dict) else 0
+    # Only new prospects the writer can write for count. One without a
+    # deliverable email is not waiting on the writer, and counting it would
+    # hold back prospecting every round (the 2026-10-14 deadlock).
+    new_prospects = summary.get("writable_prospects", 0) or 0
     draft_campaigns = summary.get("draft_campaigns", 0) or 0
     open_conversations = summary.get("open_conversations", 0) or 0
 
@@ -99,9 +101,12 @@ async def decide_next_action(
     elif draft_campaigns > 0:
         action, reason = "send_campaign", f"{draft_campaigns} draft campaign(s) ready to deploy"
     elif new_prospects > 0:
-        action, reason = "write_campaign", f"{new_prospects} new prospect(s) with no drafts ready"
+        action, reason = "write_campaign", (
+            f"{new_prospects} new prospect(s) with a deliverable email to write for")
     elif new_prospects < 20:
-        action, reason = "prospect", f"only {new_prospects} new prospect(s); pipeline needs leads"
+        action, reason = "prospect", (
+            f"only {new_prospects} new prospect(s) with a deliverable email; "
+            "pipeline needs leads")
     else:
         action, reason = "idle", "pipeline is healthy; running analysis"
 

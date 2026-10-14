@@ -26,6 +26,10 @@ from harvey.paths import DATA_DIR
 
 DB_PATH = DATA_DIR / "harvey.db"
 
+# Email statuses the writer drafts for. A "guess" or "invalid" address is
+# never written to, so a prospect holding one is not work for the writer.
+DELIVERABLE_EMAIL_STATUSES = ("verified", "risky")
+
 # How long (seconds) a connection waits on a locked database before failing.
 BUSY_TIMEOUT_SECONDS = 30.0
 
@@ -1419,6 +1423,23 @@ class StateManager:
                 rows = await cursor.fetchall()
                 return {row[0]: row[1] for row in rows}
 
+    async def count_writable_prospects(self) -> int:
+        """New prospects the writer can draft for: an email it may write to.
+
+        The same rule as the writer's own filter. A new prospect without a
+        deliverable email is not work waiting to be done, and counting it
+        would hold the scout back forever.
+        """
+        placeholders = ",".join("?" for _ in DELIVERABLE_EMAIL_STATUSES)
+        async with self._connect() as db:
+            async with db.execute(
+                "SELECT COUNT(*) FROM prospects WHERE status = 'new' "
+                "AND COALESCE(email, '') != '' "
+                f"AND COALESCE(NULLIF(email_status, ''), 'guess') IN ({placeholders})",
+                DELIVERABLE_EMAIL_STATUSES,
+            ) as cursor:
+                return (await cursor.fetchone())[0]
+
     # ── Feedback ──
 
     async def add_feedback(
@@ -1835,6 +1856,8 @@ class StateManager:
 
         return {
             "prospects": prospect_counts,
+            # New prospects the writer can actually write for (see above).
+            "writable_prospects": await self.count_writable_prospects(),
             "draft_campaigns": draft_campaigns,
             "active_campaigns": active_campaigns,
             "open_conversations": open_conversations,
