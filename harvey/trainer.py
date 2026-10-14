@@ -6,6 +6,7 @@ Falls back to manual scraping if no Cloudflare credentials are configured.
 
 import asyncio
 import copy
+import difflib
 import logging
 import os
 import time
@@ -58,6 +59,26 @@ TEMPLATE_PERSONA = {
     "email": "harvey@yourcompany.com",
     "tone": "professional, consultative, confident",
 }
+
+
+# The shipped template. The setup wizard trains into it directly; it is not
+# a hand-edited config, so it is not protected like harvey.local.yaml.
+TEMPLATE_CONFIG = PROJECT_ROOT / "harvey.yaml"
+
+
+def _changed_keys(old: dict, new: dict) -> list[str]:
+    """Dotted section.key names whose values differ between two configs."""
+    changed = []
+    for section in dict.fromkeys([*old, *new]):
+        a, b = old.get(section), new.get(section)
+        if isinstance(a, dict) and isinstance(b, dict):
+            changed += [
+                f"{section}.{key}" for key in dict.fromkeys([*a, *b])
+                if a.get(key) != b.get(key)
+            ]
+        elif a != b:
+            changed.append(section)
+    return changed
 
 
 def _settings_in_effect(config_path: Path) -> dict:
@@ -388,6 +409,27 @@ class Trainer:
         self.state = StateManager()
         self.brain = Brain(self.state, self.brain_config)
         self.scraped_pages: dict[str, str] = {}
+        self.skills_dir = PROJECT_ROOT / "skills"
+        # What this run wrote, and what it proposed next to existing files.
+        self.written: list[Path] = []
+        self.proposed: list[tuple[Path, Path]] = []
+
+    def _write_or_propose(self, path: Path, content: str, protect: bool = True):
+        """Write a generated file, or propose it next to the existing one.
+
+        An existing file may carry hand edits and comments (a re-train), so
+        it is never overwritten: the new version goes to <name>.proposed, to
+        merge by hand. A first training writes directly.
+        """
+        if not (protect and path.exists()):
+            path.write_text(content, encoding="utf-8")
+            self.written.append(path)
+            return
+        if path.read_text(encoding="utf-8", errors="replace") == content:
+            return  # nothing new to propose
+        proposed = path.with_name(path.name + ".proposed")
+        proposed.write_text(content, encoding="utf-8")
+        self.proposed.append((path, proposed))
 
     async def train(
         self,
@@ -400,7 +442,8 @@ class Trainer:
         1. Deep crawl the site (Cloudflare /crawl or fallback)
         2. Analyze all content with the configured brain
         3. Extract product info, ICP, objections, competitive intel
-        4. Generate complete config + product knowledge skill
+        4. Generate config + product knowledge skill. Files that already
+           exist are never overwritten: the new versions go to *.proposed.
         """
         load_dotenv()
         await self.state.init_db()
@@ -482,8 +525,11 @@ class Trainer:
         print("[6/6] Building configuration and product knowledge...")
         config = self._build_config(product_info, icp_info, objections, settings)
 
-        with open(config_path, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        self._write_or_propose(
+            config_path,
+            yaml.dump(config, default_flow_style=False, sort_keys=False),
+            protect=config_path.resolve() != TEMPLATE_CONFIG.resolve(),
+        )
 
         # Generate product knowledge skill
         await self._generate_product_knowledge(product_info, icp_info, competitive_intel)
@@ -500,11 +546,7 @@ class Trainer:
         print(f"  ICP titles:   {', '.join(config['icp']['titles'])}")
         print(f"  Industries:   {', '.join(config['icp']['industries'])}")
         print(f"  Pages crawled: {len(self.scraped_pages)}")
-        print(f"\n  Files generated:")
-        print(f"    - {config_path}")
-        print(f"    - skills/product_knowledge.md")
-        if competitive_intel.get("competitors"):
-            print(f"    - skills/competitive_intel.md")
+        self._print_files()
         persona = config["persona"]
         print(f"\n  Sender kept as configured: {persona['name'] or '(no name)'}"
               f" <{persona['email'] or 'no email'}>, provider "
@@ -517,6 +559,41 @@ class Trainer:
         print(f"  Then run: harvey run\n")
 
         return config
+
+    def _print_files(self):
+        """What this run wrote, and what it proposed and why."""
+        def show(path: Path) -> str:
+            try:
+                return str(path.relative_to(PROJECT_ROOT))
+            except ValueError:
+                return str(path)
+
+        if self.written:
+            print(f"\n  Files written:")
+            for path in self.written:
+                print(f"    - {show(path)}")
+        if not self.proposed:
+            return
+        print(f"\n  Proposed (your files were left exactly as they are):")
+        for live, proposed in self.proposed:
+            old = live.read_text(encoding="utf-8", errors="replace").splitlines()
+            new = proposed.read_text(encoding="utf-8").splitlines()
+            diff = list(difflib.unified_diff(old, new, lineterm="", n=0))
+            added = sum(1 for d in diff if d.startswith("+") and not d.startswith("+++"))
+            removed = sum(1 for d in diff if d.startswith("-") and not d.startswith("---"))
+            print(f"    - {show(proposed)}  (+{added} -{removed} lines)")
+            if live.suffix in (".yaml", ".yml"):
+                try:
+                    keys = _changed_keys(
+                        yaml.safe_load("\n".join(old)) or {},
+                        yaml.safe_load("\n".join(new)) or {},
+                    )
+                    if keys:
+                        print(f"      changed: {', '.join(keys)}")
+                except yaml.YAMLError:
+                    pass
+            print(f"      compare: diff -u {show(live)} {show(proposed)}")
+        print(f"  Nothing in effect changed. Merge what you want by hand.")
 
     def _get_all_content(self, max_chars: int = 60000) -> str:
         """Combine all scraped pages into one string for analysis."""
@@ -742,9 +819,7 @@ Do NOT pursue prospects who:
 {product_info.get('tone', 'professional, consultative, confident')}
 """
 
-        skills_path = PROJECT_ROOT / "skills" / "product_knowledge.md"
-        skills_path.write_text(knowledge)
-        print(f"      Generated: skills/product_knowledge.md")
+        self._write_or_propose(self.skills_dir / "product_knowledge.md", knowledge)
 
     async def _generate_battle_cards(self, product_info: dict, competitive_intel: dict):
         """Generate competitive battle cards as a skill file."""
@@ -790,9 +865,7 @@ What prospects do instead of buying a solution like ours:
 ---
 """
 
-        skills_path = PROJECT_ROOT / "skills" / "competitive_intel.md"
-        skills_path.write_text(cards)
-        print(f"      Generated: skills/competitive_intel.md")
+        self._write_or_propose(self.skills_dir / "competitive_intel.md", cards)
 
     def _build_config(
         self,

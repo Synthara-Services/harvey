@@ -148,7 +148,17 @@ def test_no_config_anywhere_means_defaults(tmp_path, monkeypatch):
     assert trainer_mod._settings_in_effect(tmp_path / "new.yaml") == {}
 
 
-# ── the full run, with every network call and real-file write stubbed ──
+# ── the full run, offline: no network, no real config, no real skills/ ──
+
+
+COMPETITION = {
+    "competitors": [{
+        "name": "Rival", "how_we_win": "speed",
+        "their_weakness": "slow", "migration_angle": "easy",
+    }],
+    "unique_strengths": ["one team"],
+    "common_alternatives": ["spreadsheets"],
+}
 
 
 def returns(value):
@@ -157,23 +167,23 @@ def returns(value):
     return stub
 
 
-def offline_trainer(monkeypatch):
+def offline_trainer(monkeypatch, tmp_path):
+    # Every path the trainer derives from the project root lands in tmp_path,
+    # so no version of the trainer can write the real skills/ from a test.
+    monkeypatch.setattr(trainer_mod, "PROJECT_ROOT", tmp_path)
     trainer = trainer_mod.Trainer(brain_config=BrainConfig())
     monkeypatch.setattr(trainer.state, "init_db", returns(None))
     monkeypatch.setattr(trainer_mod, "load_dotenv", lambda *a, **k: None)
     monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
     monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
-    # Never write the real skills/ files from a test.
-    monkeypatch.setattr(trainer, "_generate_product_knowledge", returns(None))
-    monkeypatch.setattr(trainer, "_generate_battle_cards", returns(None))
-    return trainer
 
-
-@pytest.mark.asyncio
-async def test_train_writes_what_it_learned_and_keeps_the_sender(tmp_path, monkeypatch):
-    out = tmp_path / "harvey.local.yaml"
-    out.write_text(yaml.safe_dump(CONFIGURED, sort_keys=False), encoding="utf-8")
-    trainer = offline_trainer(monkeypatch)
+    # No config anywhere unless a test writes one: never the repo's own.
+    def no_config():
+        raise ConfigFileNotFoundError("no config")
+    monkeypatch.setattr(trainer_mod, "_find_config_file", no_config)
+    # Skills go to a temporary folder, never the real skills/.
+    trainer.skills_dir = tmp_path / "skills"
+    trainer.skills_dir.mkdir(exist_ok=True)
 
     class OnePage:
         async def crawl(self, base_url, max_pages=100):
@@ -182,23 +192,97 @@ async def test_train_writes_what_it_learned_and_keeps_the_sender(tmp_path, monke
     monkeypatch.setattr(trainer_mod, "FallbackCrawler", OnePage)
     monkeypatch.setattr(trainer, "_extract_product_info", returns(LEARNED_PRODUCT))
     monkeypatch.setattr(trainer, "_extract_icp", returns(LEARNED_ICP))
-    monkeypatch.setattr(trainer, "_extract_competitive_intel", returns({}))
+    monkeypatch.setattr(trainer, "_extract_competitive_intel", returns(COMPETITION))
     monkeypatch.setattr(trainer, "_generate_objections", returns(OBJECTIONS))
+    return trainer
+
+
+def proposals(tmp_path):
+    return sorted(p.name for p in tmp_path.rglob("*.proposed"))
+
+
+@pytest.mark.asyncio
+async def test_first_training_writes_every_file_directly(tmp_path, monkeypatch):
+    out = tmp_path / "harvey.local.yaml"
+    trainer = offline_trainer(monkeypatch, tmp_path)
 
     assert await trainer.train("https://example.com", str(out))
-    written = yaml.safe_load(out.read_text(encoding="utf-8"))
-    assert written["persona"] == CONFIGURED["persona"]
-    assert written["channels"] == CONFIGURED["channels"]
-    assert written["usage"] == CONFIGURED["usage"]
-    assert written["product"]["name"] == "Learned Product"
-    HarveyConfig(**written)
+    assert yaml.safe_load(out.read_text(encoding="utf-8"))["product"]["name"] == "Learned Product"
+    assert "Learned Product" in (tmp_path / "skills" / "product_knowledge.md").read_text(encoding="utf-8")
+    assert "Rival" in (tmp_path / "skills" / "competitive_intel.md").read_text(encoding="utf-8")
+    assert proposals(tmp_path) == []
+
+
+@pytest.mark.asyncio
+async def test_retrain_proposes_and_leaves_hand_edits_and_comments_alone(tmp_path, monkeypatch, capsys):
+    out = tmp_path / "harvey.local.yaml"
+    config_text = "# Kept by hand: review the send limit on 2026-10-28.\n" + yaml.safe_dump(
+        CONFIGURED, sort_keys=False
+    ).replace("  offer:\n", "  # The link goes only into interested replies.\n  offer:\n")
+    assert "# The link goes only" in config_text
+    out.write_text(config_text, encoding="utf-8")
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "product_knowledge.md").write_text("# Hand-written\nWe are Example Co.\n", encoding="utf-8")
+    (skills / "competitive_intel.md").write_text("# Hand-written cards\n", encoding="utf-8")
+    before = {p: p.read_bytes() for p in (out, *skills.iterdir())}
+    trainer = offline_trainer(monkeypatch, tmp_path)
+
+    assert await trainer.train("https://example.com", str(out))
+
+    # Every existing file is byte for byte as it was, comments included.
+    assert {p: p.read_bytes() for p in before} == before
+    assert proposals(tmp_path) == [
+        "competitive_intel.md.proposed", "harvey.local.yaml.proposed", "product_knowledge.md.proposed",
+    ]
+    proposed = yaml.safe_load((tmp_path / "harvey.local.yaml.proposed").read_text(encoding="utf-8"))
+    assert proposed["product"]["name"] == "Learned Product"
+    assert proposed["product"]["offer"] == CONFIGURED["product"]["offer"]
+    assert proposed["persona"] == CONFIGURED["persona"]
+    assert proposed["channels"] == CONFIGURED["channels"]
+    HarveyConfig(**proposed)
+    assert "Learned Product" in (skills / "product_knowledge.md.proposed").read_text(encoding="utf-8")
+
+    printed = capsys.readouterr().out
+    assert "harvey.local.yaml.proposed" in printed
+    assert "product.name" in printed
+    assert "Nothing in effect changed" in printed
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_proposal_is_not_written(tmp_path, monkeypatch):
+    out = tmp_path / "harvey.local.yaml"
+    assert await offline_trainer(monkeypatch, tmp_path).train("https://example.com", str(out))
+    again = offline_trainer(monkeypatch, tmp_path)
+    assert await again.train("https://example.com", str(out))
+    assert again.written == [] and again.proposed == []
+    assert proposals(tmp_path) == []
+
+
+@pytest.mark.asyncio
+async def test_the_setup_template_is_still_trained_into_directly(tmp_path, monkeypatch):
+    # The setup wizard trains into the shipped harvey.yaml, which always
+    # exists: it is a template, not a hand-edited config.
+    template = tmp_path / "harvey.yaml"
+    template.write_text(yaml.safe_dump(shipped_yaml(), sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(trainer_mod, "TEMPLATE_CONFIG", template)
+    trainer = offline_trainer(monkeypatch, tmp_path)
+
+    assert await trainer.train("https://example.com", str(template))
+    assert yaml.safe_load(template.read_text(encoding="utf-8"))["product"]["name"] == "Learned Product"
+    assert proposals(tmp_path) == []
+
+
+def test_proposals_never_reach_git():
+    lines = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "*.proposed" in lines
 
 
 @pytest.mark.asyncio
 async def test_an_unreadable_config_is_never_overwritten(tmp_path, monkeypatch):
     out = tmp_path / "harvey.local.yaml"
     out.write_text("persona: [unclosed", encoding="utf-8")
-    trainer = offline_trainer(monkeypatch)
+    trainer = offline_trainer(monkeypatch, tmp_path)
 
     class NoCrawl:
         def __init__(self, *_a, **_k):
