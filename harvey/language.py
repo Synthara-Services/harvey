@@ -136,8 +136,14 @@ ALBANIAN_OPT_OUT_PATTERNS = (
     r"\bmos\s+(?:me|na)\s+shkrua(?:j|ni)\b",           # mos më/na shkruaj/shkruani
     r"\bmos\s+(?:me|na)\s+dergo(?:j|ni)?\b",           # mos më/na dërgo/dërgoni
     r"\bmos\s+(?:me|na)\s+kontakto(?:j|ni)?\b",        # mos më/na kontakto/kontaktoni
-    r"\b(?:(?:me|na)\s+)?hiq(?:ni)?(?:me|na)?\s+nga\s+list(?:a|e|es|en)\b",  # (më) hiqni nga lista
-    r"\bcregjistro\w*",                                # çregjistrohem, çregjistroni, ...
+    r"\bmos\s+(?:me|na)\s+shqeteso(?:j|ni)?\b",        # mos më/na shqetëso/shqetësoni
+    r"\bmos\s+(?:me|na)\s+bezdis(?:ni)?\b",            # mos më/na bezdis/bezdisni
+    # (më) hiqni/fshini nga lista, hiqmë/fshimë nga lista
+    r"\b(?:(?:me|na)\s+)?(?:hiq|fshi)(?:ni|j)?(?:me|na)?\s+nga\s+list(?:a|e|es|en)\b",
+    # hiqni/hiqeni/fshini/fshijeni emailin/adresën tim/time/tonë
+    r"\b(?:hiq|fshi)(?:ni|eni|jeni)?\s+(?:e-?mailin|email-in|adresen)\s+(?:tim|time|tone|tona)\b",
+    r"\bc['’]?regjistro\w*",                           # çregjistrohem, ç'regjistrohem, çregjistroni
+    r"\bc['’]?abono\w*",                               # çabonohem, çabonoj (not abonohem)
     r"\bfshi(?:j|ni)?\s+te\s+dhenat\b",                # fshini të dhënat (e mia)
 )
 ALBANIAN_ESCALATION_PATTERNS = (
@@ -145,6 +151,12 @@ ALBANIAN_ESCALATION_PATTERNS = (
     r"\bpadi(?:a|ne|se|te|ve|s|sa|sim|sni|t|tur)?\b",  # padi, padia, padinë, padis, paditur
     r"\bgjykat(?:a|e|en|es|at|ave)?\b",                # gjykatë, gjykata, gjykatën, ...
     r"\bgjyq(?:i|in|it|e|et)?\b",                      # gjyq ("në gjyq": to court)
+    r"\bgjyqesor(?:e|i|in|it|et|ja)?\b",               # gjyqësor ("procedim gjyqësor")
+    r"\bngacmim(?:i|in|it|e|et|eve)?\b",               # ngacmim (harassment)
+    # Komisioneri, Albania's data protection authority (not komision/komisioni)
+    r"\bkomisioner(?:i|in|it|e|et)?\b",
+    # Agjencia për Informim dhe Privatësi, Kosovo's data protection authority
+    r"\bagjenci(?:a|ne|se|ja)?\s+per\s+informim\s+dhe\s+privates\w*",
 )
 _OPT_OUT_RE = re.compile("|".join(ALBANIAN_OPT_OUT_PATTERNS))
 _ESCALATION_RE = re.compile("|".join(ALBANIAN_ESCALATION_PATTERNS))

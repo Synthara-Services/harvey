@@ -246,6 +246,14 @@ def test_reading_a_reply_strips_both_opt_out_lines():
     "Më hiqni nga lista.", "me hiqni nga lista juaj", "Hiqmë nga lista.", "hiqni nga listës",
     "Çregjistrohem.", "cregjistrohem", "Ju lutem më çregjistroni.",
     "Fshini të dhënat e mia.", "fshini te dhenat e mia", "fshij te dhenat",
+    # added after review (#22)
+    "Mos më shqetësoni më.", "mos me shqetesoni", "Mos na shqetësoni.", "mos më shqetëso",
+    "Mos më bezdisni.", "mos na bezdisni", "mos me bezdis",
+    "Më fshini nga lista.", "me fshini nga lista juaj", "Fshimë nga lista.", "fshime nga listes",
+    "Hiqni emailin tim.", "hiqeni adresën time", "Fshini emailin tonë.", "fshijeni adresen tone",
+    "hiqni e-mailin tim nga lista",
+    "Ç'regjistrohem.", "c'regjistrohem", "Ç’regjistrohem, faleminderit.",
+    "Çabonohem.", "cabonohem", "Po çabonoj.", "Ju lutem më çabononi.",
 ])
 def test_albanian_opt_outs_are_honored(text):
     assert is_albanian_opt_out(text)
@@ -257,6 +265,11 @@ def test_albanian_opt_outs_are_honored(text):
     "Lista e çmimeve do të ndihmonte.",       # a price list would help
     "Të dhënat tona janë të sigurta.",        # our data is safe
     "Mos u shqetësoni, s'ka problem.",        # don't worry
+    "Dua të abonohem në buletinin tuaj.",     # I want to subscribe
+    "Si mund të regjistrohem?",               # how can I register?
+    "Ju lutem fshini emailin e gabuar.",      # delete the wrong email
+    "Na dërgoni emailin tuaj.",               # send us your email
+    "Nuk ka asnjë shqetësim.",                # no concern at all
 ])
 def test_ordinary_albanian_is_not_an_opt_out(text):
     assert not is_albanian_opt_out(text)
@@ -267,6 +280,13 @@ def test_ordinary_albanian_is_not_an_opt_out(text):
     "Do t'ju padis.", "do te bej padi", "Kjo do të jetë një padi.", "Ju kemi paditur.",
     "Kjo do të përfundojë në gjykatë.", "ne gjykate", "Gjykata do të vendosë.",
     "Do t'ju çoj në gjyq.",
+    # added after review (#22)
+    "Do të nis procedim gjyqësor.", "procedim gjyqesor", "Kjo është çështje gjyqësore.",
+    "Kjo është ngacmim.", "ngacmimi duhet të ndalet", "Do ta raportoj për ngacmim.",
+    "Do t'ju raportoj te Komisioneri.", "komisioneri per mbrojtjen e te dhenave",
+    "Kam shkruar Komisionerit.",
+    "Do t'ju raportoj në Agjencinë për Informim dhe Privatësi.",
+    "agjencia per informim dhe privatesi",
 ])
 def test_albanian_legal_threats_go_to_a_human(text):
     assert is_albanian_escalation(text)
@@ -275,6 +295,8 @@ def test_albanian_legal_threats_go_to_a_human(text):
 @pytest.mark.parametrize("text", [
     "Kjo është e padiskutueshme.", "Çmimi është padiskutueshëm i mirë.",
     "Më pëlqen avokadoja.", "Gjykimi juaj është i mirë.",
+    "Komisioni ynë do të vendosë.", "Sa është komisioni?", "pa komision",  # commission
+    "Kemi një agjenci marketingu.",
 ])
 def test_ordinary_albanian_is_not_escalated(text):
     assert not is_albanian_escalation(text)
