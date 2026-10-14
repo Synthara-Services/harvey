@@ -59,6 +59,20 @@ def looks_like_bounce(from_email: str, subject: str) -> bool:
     return any(m in f for m in BOUNCE_SENDERS) or any(m in s for m in BOUNCE_SUBJECTS)
 
 
+def outreach_footer(email_cfg) -> str:
+    """Signature plus opt-out line: first emails and follow-ups."""
+    parts = (
+        getattr(email_cfg, "signature", "") or "",
+        getattr(email_cfg, "opt_out_line", "") or "",
+    )
+    return "\n".join(p.strip() for p in parts if p.strip())
+
+
+def reply_footer(email_cfg) -> str:
+    """Signature only: someone who wrote back already chose to talk."""
+    return (getattr(email_cfg, "signature", "") or "").strip()
+
+
 def with_footer(body: str, footer: str) -> str:
     """Append the configured footer after a blank line, once."""
     body = (body or "").rstrip()
@@ -68,20 +82,77 @@ def with_footer(body: str, footer: str) -> str:
     return f"{body}\n\n{footer}"
 
 
+def _norm_line(line: str) -> str:
+    """A line as compared with our footer: case, spacing and quote marks ignored."""
+    line = line.replace("’", "'").replace("‘", "'")
+    return " ".join(line.split()).casefold()
+
+
+def _drop_footer_lines(lines: list[str], footer: str) -> list[str]:
+    """Remove our footer line by line.
+
+    Mail clients re-wrap long lines and add blank lines when they quote,
+    so the footer rarely survives as one block. A run of reply lines is
+    ours when, joined, it reads as one or more consecutive footer lines.
+    """
+    parts = [p for p in (_norm_line(l) for l in footer.split("\n")) if p]
+    if not parts:
+        return lines
+    runs = {
+        " ".join(parts[a:b])
+        for a in range(len(parts))
+        for b in range(a + 1, len(parts) + 1)
+    }
+    kept: list[str] = []
+    i = 0
+    while i < len(lines):
+        joined, end = "", None
+        for j in range(i, len(lines)):
+            piece = _norm_line(lines[j])
+            if not piece:
+                break
+            joined = f"{joined} {piece}".strip()
+            if joined in runs:
+                end = j
+            elif not any(r.startswith(joined + " ") for r in runs):
+                break
+        if end is None:
+            kept.append(lines[i])
+            i += 1
+        else:
+            i = end + 1
+    return kept
+
+
 # Where a quoted copy of an earlier email starts, in the languages Harvey's
-# prospects write in (English, Albanian, Italian, German). Either an
-# attribution line ending in "wrote:" (German puts the name between
-# "schrieb" and the colon) or an Outlook From/Sent header block.
+# prospects write in (English, Albanian, Italian, German, Serbian in both
+# scripts, Macedonian). Either an attribution line ending in "wrote:"
+# (German puts the name between "schrieb" and the colon) or an Outlook
+# From/Sent header block. Serbian Gmail writes "је написао/ла:" and often
+# wraps "је" onto the line before, so only the second word is matched.
 QUOTE_ATTRIBUTION_RE = re.compile(
-    r"\b(wrote|shkroi|ha scritto|schrieb)\b[^\n]*:\s*$", re.IGNORECASE
+    r"\b(wrote|shkroi|ha scritto|schrieb|написао/ла|napisao/la|напиша)\b[^\n]*:\s*$",
+    re.IGNORECASE,
 )
-# A Gmail attribution wrapped over two lines starts with one of these.
-QUOTE_ATTRIBUTION_OPENER_RE = re.compile(r"^\s*(On|Më|Me|Il|Am)\s", re.IGNORECASE)
+# A Gmail attribution wrapped over two lines starts with one of these:
+# a lead word, or (Serbian) a weekday and date such as "сре, 26. феб 2025".
+QUOTE_ATTRIBUTION_OPENER_RE = re.compile(
+    r"^\s*(On|Më|Me|Il|Am|На)\s|^\s*\w{3}\.?,\s\d{1,2}\.?\s\w{3,4}\.?\s\d{4}",
+    re.IGNORECASE,
+)
+# (From, Sent) labels. Outlook for Windows and the web write "Sent";
+# Outlook for Mac writes "Date" (Datum, Data) and may put a Reply-To line
+# between the two.
 OUTLOOK_HEADER_LABELS = (
     ("from:", "sent:"),
     ("nga:", "dërguar:"),
     ("da:", "inviato:"),
     ("von:", "gesendet:"),
+    ("od:", "poslato:"),
+    ("од:", "послато:"),
+    ("from:", "date:"),
+    ("von:", "datum:"),
+    ("da:", "data:"),
 )
 QUOTE_SEPARATOR_RE = re.compile(r"^\s*(_{5,}|-{5,}.*)\s*$")
 
@@ -102,8 +173,11 @@ def _quote_start(lines: list[str]) -> int | None:
                 return i - 1 if wrapped else i
         label = line.strip().lstrip("*").lower()
         for from_label, sent_label in OUTLOOK_HEADER_LABELS:
+            # A real Sent/Date line carries the date; a prospect's own
+            # "Date: whenever suits you" does not.
             if label.startswith(from_label) and any(
                 nxt.strip().lstrip("*").lower().startswith(sent_label)
+                and re.search(r"\d", nxt)
                 for nxt in lines[i + 1:i + 4]
             ):
                 return i
@@ -113,15 +187,14 @@ def _quote_start(lines: list[str]) -> int | None:
 def strip_quoted_reply(text: str, footer: str = "") -> str:
     """The part of a reply the prospect actually wrote.
 
-    Drops our own footer (exact match), lines starting with ">", and
-    everything from a quoted-reply header onward, so a phrase quoted from
-    our own email can never decide the prospect's intent.
+    Drops our own signature and opt-out line (line by line, wherever they
+    appear), lines starting with ">", and everything from a quoted-reply
+    header onward, so a phrase quoted from our own email can never decide
+    the prospect's intent.
     """
     text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
-    footer = (footer or "").replace("\r\n", "\n").strip()
-    if footer:
-        text = text.replace(footer, "")
-    lines = text.split("\n")
+    footer = (footer or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = _drop_footer_lines(text.split("\n"), footer)
     cut = _quote_start(lines)
     if cut is not None:
         lines = lines[:cut]

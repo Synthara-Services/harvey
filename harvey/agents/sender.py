@@ -23,6 +23,7 @@ from harvey.integrations.instantly import InstantlyClient
 from harvey.integrations.mail_provider import (
     NATIVE_PROVIDERS,
     get_mail_provider,
+    outreach_footer,
     with_footer,
 )
 from harvey.state import StateManager
@@ -360,7 +361,7 @@ class Sender:
         )
         initial_status = "pending_review" if require_approval else "approved"
         allow_risky = getattr(self.config.channels.email, "send_to_risky", False)
-        footer = getattr(self.config.channels.email, "footer", "")
+        footer = outreach_footer(self.config.channels.email)
         sendable_email = (
             SENDABLE_EMAIL_STATUSES_WITH_RISKY if allow_risky
             else SENDABLE_EMAIL_STATUSES

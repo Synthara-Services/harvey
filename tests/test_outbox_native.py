@@ -353,13 +353,19 @@ async def test_inbound_dedup(state):
 
 # ── footer and quoted replies ──
 
-FOOTER = (
+SIGNATURE = (
     "Jane Roe\n"
     "Founder, Example Co\n"
     "example.com\n"
-    "1 Example Street, Tirana, Albania\n"
-    "Not relevant for you? Just say so and I won't write again."
+    "1 Example Street, Tirana, Albania"
 )
+OPT_OUT_LINE = "Not relevant for you? Just say so and I won't write again."
+FOOTER = SIGNATURE + "\n" + OPT_OUT_LINE
+
+
+def use_footer(monkeypatch):
+    monkeypatch.setattr(Cfg.channels.email, "signature", SIGNATURE, raising=False)
+    monkeypatch.setattr(Cfg.channels.email, "opt_out_line", OPT_OUT_LINE, raising=False)
 
 # The reply that exposed the bug: an interested answer above a quoted copy
 # of our email whose footer still carried an opt-out phrase.
@@ -376,7 +382,7 @@ QUOTE_ONLY = THURSDAY_REPLY.split("\n\n", 1)[1]
 
 @pytest.mark.asyncio
 async def test_staged_body_carries_footer_and_is_exactly_what_sends(state, monkeypatch):
-    monkeypatch.setattr(Cfg.channels.email, "footer", FOOTER, raising=False)
+    use_footer(monkeypatch)
     pid = await seed_prospect(state)
     await seed_campaign(state, [pid])
     sender = make_sender(state, FakeProvider(), require_approval=True)
@@ -384,7 +390,9 @@ async def test_staged_body_carries_footer_and_is_exactly_what_sends(state, monke
 
     pending = await state.get_outbox(status="pending_review")
     step1 = next(i for i in pending if i["step"] == 1)
+    step2 = next(i for i in pending if i["step"] == 2)
     assert step1["body"] == "Body for Acme. Question?\n\n" + FOOTER
+    assert step2["body"] == "Another angle Jane.\n\n" + FOOTER
 
     await state.approve_outbox(step1["id"])
     await sender._drain_due()
@@ -392,8 +400,8 @@ async def test_staged_body_carries_footer_and_is_exactly_what_sends(state, monke
 
 
 @pytest.mark.asyncio
-async def test_handler_reply_carries_footer(state, monkeypatch):
-    monkeypatch.setattr(Cfg.channels.email, "footer", FOOTER, raising=False)
+async def test_handler_reply_carries_the_signature_without_the_opt_out_line(state, monkeypatch):
+    use_footer(monkeypatch)
     await seed_prospect(state, status="contacted")
     provider = FakeProvider()
     provider.inbound = [InboundMessage(
@@ -405,12 +413,33 @@ async def test_handler_reply_carries_footer(state, monkeypatch):
 
     replies = [i for i in await state.get_outbox() if i["kind"] == "reply"]
     assert len(replies) == 1
-    assert replies[0]["body"] == "Sure, happy to help.\n\n" + FOOTER
+    assert replies[0]["body"] == "Sure, happy to help.\n\n" + SIGNATURE
+    assert OPT_OUT_LINE not in replies[0]["body"]
+
+
+class WriterBrain(StubBrain):
+    async def think_json(self, prompt, **_k):
+        return {"subject": "booking flow", "body": "Saw Acme books by phone. Worth a look?"}
+
+
+@pytest.mark.asyncio
+async def test_personal_first_email_carries_signature_and_opt_out_line(state, monkeypatch):
+    # The writer stages a per-prospect email 1 itself, ahead of the sender.
+    from harvey.agents.writer import Writer
+    use_footer(monkeypatch)
+    pid = await seed_prospect(state)
+    campaign = await seed_campaign(state, [pid])
+    writer = Writer(brain=WriterBrain(), state=state, config=Cfg())
+    writer.skills = ""
+    await writer._personalize_first_emails(campaign.id, [await state.get_prospect(pid)])
+
+    staged = await state.get_outbox(status="pending_review")
+    assert [i["body"] for i in staged] == ["Saw Acme books by phone. Worth a look?\n\n" + FOOTER]
 
 
 @pytest.mark.asyncio
 async def test_quoted_opt_out_phrase_does_not_opt_out_an_interested_reply(state, monkeypatch):
-    monkeypatch.setattr(Cfg.channels.email, "footer", FOOTER, raising=False)
+    use_footer(monkeypatch)
     pid = await seed_prospect(state, status="contacted")
     provider = FakeProvider()
     provider.inbound = [InboundMessage(
@@ -428,7 +457,7 @@ async def test_quoted_opt_out_phrase_does_not_opt_out_an_interested_reply(state,
 
 @pytest.mark.asyncio
 async def test_opt_out_above_the_quote_is_still_honored(state, monkeypatch):
-    monkeypatch.setattr(Cfg.channels.email, "footer", FOOTER, raising=False)
+    use_footer(monkeypatch)
     pid = await seed_prospect(state, status="contacted")
     provider = FakeProvider()
     provider.inbound = [InboundMessage(

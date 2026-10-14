@@ -16,6 +16,8 @@ from harvey.integrations.instantly import InstantlyClient
 from harvey.integrations.mail_provider import (
     NATIVE_PROVIDERS,
     get_mail_provider,
+    outreach_footer,
+    reply_footer,
     strip_quoted_reply,
     with_footer,
 )
@@ -230,7 +232,7 @@ class Handler:
         # copy of our own email: a phrase quoted from it must not decide.
         raw_text = reply_text
         reply_text = strip_quoted_reply(
-            raw_text, getattr(self.config.channels.email, "footer", "")
+            raw_text, outreach_footer(self.config.channels.email)
         )
         # Hard keyword checks run FIRST and override the LLM — opt-outs and
         # legal threats must never be missed.
@@ -499,9 +501,7 @@ class Handler:
             kind="reply",
             to_email=prospect.email,
             subject=subject or "Re: your note",
-            body=with_footer(
-                response, getattr(self.config.channels.email, "footer", "")
-            ),
+            body=with_footer(response, reply_footer(self.config.channels.email)),
             send_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             status="pending_review" if require_approval else "approved",
             provider=self.provider.name if self.provider else "",

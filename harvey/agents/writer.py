@@ -15,7 +15,11 @@ from datetime import datetime, timezone
 
 from harvey.brain import Brain
 from harvey.config import HarveyConfig
-from harvey.integrations.mail_provider import NATIVE_PROVIDERS
+from harvey.integrations.mail_provider import (
+    NATIVE_PROVIDERS,
+    outreach_footer,
+    with_footer,
+)
 from harvey.models.campaign import Campaign, EmailStep
 from harvey.state import StateManager
 
@@ -138,6 +142,7 @@ class Writer:
         status = "pending_review" if require_approval else "approved"
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         provider = self.config.channels.email.provider
+        footer = outreach_footer(self.config.channels.email)
 
         drafted = 0
         for prospect in prospects:
@@ -154,7 +159,7 @@ class Writer:
                 step=1,
                 to_email=prospect.email,
                 subject=draft["subject"],
-                body=draft["body"],
+                body=with_footer(draft["body"], footer),
                 send_at=now,
                 status=status,
                 provider=provider,
