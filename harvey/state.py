@@ -413,6 +413,11 @@ MIGRATIONS: list[str] = [
     -- so one subscription's budget never consumes the other's.
     ALTER TABLE usage_log ADD COLUMN codex_calls INTEGER DEFAULT 0;
     """,
+    # ── v12: the prospect's country, which decides the email language ──
+    """
+    -- Existing prospects get '' (unknown), which means English.
+    ALTER TABLE prospects ADD COLUMN country TEXT DEFAULT '';
+    """,
 ]
 
 BRAIN_PROVIDERS = ("claude", "codex")
@@ -662,8 +667,8 @@ class StateManager:
                     email_status, phone, phone_verified, linkedin_url, title,
                     seniority, department, source, source_url, status, score,
                     personalization_notes, company, industry, company_size,
-                    created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    country, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     prospect.id, prospect.company_id,
                     prospect.first_name, prospect.last_name,
@@ -676,6 +681,7 @@ class StateManager:
                     prospect.status, prospect.score,
                     prospect.personalization_notes,
                     prospect.company, prospect.industry, prospect.company_size,
+                    prospect.country,
                     prospect.created_at.isoformat(),
                     prospect.updated_at.isoformat(),
                 ),

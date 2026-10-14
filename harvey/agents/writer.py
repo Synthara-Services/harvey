@@ -20,6 +20,7 @@ from harvey.integrations.mail_provider import (
     outreach_footer,
     with_footer,
 )
+from harvey.language import LANGUAGE_NAMES, language_for_country
 from harvey.models.campaign import Campaign, EmailStep
 from harvey.state import StateManager
 
@@ -142,10 +143,12 @@ class Writer:
         status = "pending_review" if require_approval else "approved"
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         provider = self.config.channels.email.provider
-        footer = outreach_footer(self.config.channels.email)
 
         drafted = 0
         for prospect in prospects:
+            footer = outreach_footer(
+                self.config.channels.email, language_for_country(prospect.country)
+            )
             try:
                 draft = await self._write_personal_email(prospect)
             except Exception as e:
@@ -172,6 +175,11 @@ class Writer:
                 f"Writer: drafted {drafted} personalized first email(s) "
                 f"({'awaiting approval' if require_approval else 'approved'})."
             )
+
+    @staticmethod
+    def _language_of(prospects: list) -> str:
+        """A batch's one language (batches are grouped by it)."""
+        return language_for_country(prospects[0].country) if prospects else "en"
 
     def _call_length_rule(self) -> str:
         """The configured call length, so no email offers a call of another
@@ -240,6 +248,7 @@ Requirements:
 - Write the actual text (no merge variables — you know their name/company).
 - Subject: lowercase, 2-5 words.
 - Follow every STRICT EMAIL RULE above.{self._call_length_rule()}
+- Write it in {LANGUAGE_NAMES[language_for_country(prospect.country)]}.
 
 Return ONLY JSON: {{"subject": "...", "body": "..."}}"""
 
@@ -304,6 +313,8 @@ Requirements:
 - Never be pushy or salesy. Be consultative and value-driven.
 - Subject lines: lowercase, 2-5 words.
 - Follow every rule in the STRICT EMAIL RULES above. No exceptions.{self._call_length_rule()}
+- Write all three emails in {LANGUAGE_NAMES[self._language_of(prospects)]}. Keep the merge
+  variables exactly as written.
 
 Return ONLY a JSON array (no markdown fences, no commentary):
 [
@@ -374,8 +385,10 @@ Return ONLY a JSON array (no markdown fences, no commentary):
 
         for prospect in prospects:
             # Group by industry + rough title category
+            # One language per batch, so a sequence never mixes languages.
             industry = prospect.industry or "general"
-            key = f"{industry}-outreach"
+            language = language_for_country(prospect.country)
+            key = f"{industry}-outreach" if language == "en" else f"{industry}-{language}-outreach"
 
             if key not in batches:
                 batches[key] = []

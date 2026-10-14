@@ -34,6 +34,9 @@ class Prospect(BaseModel):
     company: str = ""
     industry: str = ""
     company_size: str = ""
+    # ISO code, recorded only on evidence (see harvey/language.py); "" when
+    # unknown, which means English.
+    country: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 

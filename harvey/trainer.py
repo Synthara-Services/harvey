@@ -38,6 +38,7 @@ DEFAULT_CHANNELS = {
         "max_bounce_rate": 0.05,
         "signature": "",
         "opt_out_line": "",
+        "opt_out_line_sq": "",
     },
     "linkedin": {
         "enabled": True,

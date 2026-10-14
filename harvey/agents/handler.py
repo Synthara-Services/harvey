@@ -15,11 +15,17 @@ from harvey.config import HarveyConfig, EnvConfig
 from harvey.integrations.instantly import InstantlyClient
 from harvey.integrations.mail_provider import (
     NATIVE_PROVIDERS,
+    footer_to_strip,
     get_mail_provider,
-    outreach_footer,
     reply_footer,
     strip_quoted_reply,
     with_footer,
+)
+from harvey.language import (
+    LANGUAGE_NAMES,
+    is_albanian_escalation,
+    is_albanian_opt_out,
+    reply_language,
 )
 from harvey.models.conversation import Conversation, Message
 from harvey.state import StateManager
@@ -232,7 +238,7 @@ class Handler:
         # copy of our own email: a phrase quoted from it must not decide.
         raw_text = reply_text
         reply_text = strip_quoted_reply(
-            raw_text, outreach_footer(self.config.channels.email)
+            raw_text, footer_to_strip(self.config.channels.email)
         )
         # Hard keyword checks run FIRST and override the LLM — opt-outs and
         # legal threats must never be missed.
@@ -242,9 +248,9 @@ class Handler:
             # inside it): a human reads what arrived, nothing is guessed.
             intent = "escalate"
             reply_text = raw_text
-        elif any(p in text_lower for p in OPT_OUT_PATTERNS):
+        elif any(p in text_lower for p in OPT_OUT_PATTERNS) or is_albanian_opt_out(reply_text):
             intent = "unsubscribe"
-        elif any(p in text_lower for p in ESCALATION_PATTERNS):
+        elif any(p in text_lower for p in ESCALATION_PATTERNS) or is_albanian_escalation(reply_text):
             intent = "escalate"
         else:
             intent = await self._classify_intent(reply_text, prospect)
@@ -699,7 +705,9 @@ Write a reply that:"""
             # Every reply, so none offers a call of another length.
             prompt += f"\n- If it mentions a call, the call is {duration}, never another length"
 
-        prompt += "\n\nWrite ONLY the email body. No subject line, no greeting label, no signature block, no markdown."
+        # Their language when it is Albanian or English, otherwise English.
+        prompt += f"\n\nWrite the reply in {LANGUAGE_NAMES[reply_language(reply_text)]}."
+        prompt += "\nWrite ONLY the email body. No subject line, no greeting label, no signature block, no markdown."
 
         response = await self.brain.think(
             prompt, session_id="harvey-handler",

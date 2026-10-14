@@ -39,6 +39,7 @@ from harvey.brain import Brain
 from harvey.config import HarveyConfig, EnvConfig
 from harvey.integrations.email_finder import find_email
 from harvey.integrations.linkedin import LinkedInAutomation
+from harvey.language import country_from_evidence
 from harvey.models.company import Company
 from harvey.models.prospect import Prospect
 from harvey.state import StateManager
@@ -556,7 +557,7 @@ class Scout:
                 if await self._is_duplicate_prospect(prospect):
                     continue
 
-                await self.state.add_prospect(prospect)
+                await self._add_prospect(prospect)
                 self._remember_prospect(prospect)
                 count += 1
                 logger.info(
@@ -620,7 +621,7 @@ class Scout:
                 logger.debug(f"mark_prospects_checked failed for {domain}: {e}")
 
             for prospect in contacts:
-                await self.state.add_prospect(prospect)
+                await self._add_prospect(prospect)
                 count += 1
                 logger.info(
                     f"Scout: Added {prospect.full_name()} ({prospect.title}) "
@@ -711,7 +712,7 @@ class Scout:
                         if await self._is_duplicate_prospect(prospect):
                             continue
 
-                        await self.state.add_prospect(prospect)
+                        await self._add_prospect(prospect)
                         self._remember_prospect(prospect)
                         count += 1
                         logger.info(
@@ -775,7 +776,7 @@ class Scout:
                 if await self._is_duplicate_prospect(prospect):
                     continue
 
-                await self.state.add_prospect(prospect)
+                await self._add_prospect(prospect)
                 self._remember_prospect(prospect)
                 count += 1
 
@@ -868,7 +869,7 @@ class Scout:
 
         count = 0
         for prospect in scored_contacts:
-            await self.state.add_prospect(prospect)
+            await self._add_prospect(prospect)
             count += 1
             logger.info(
                 f"Scout: Added {prospect.full_name()} ({prospect.title}) "
@@ -1217,6 +1218,29 @@ Respond ONLY with the JSON array."""
 
     # ── Shared utilities ──
 
+    async def _add_prospect(self, prospect: Prospect) -> str:
+        """Save a prospect, with its country recorded from evidence: the
+        LinkedIn profile's country, the company's or job's location, or the
+        company's domain. No evidence leaves it unknown (English)."""
+        if not prospect.country:
+            company = None
+            if prospect.company_id:
+                try:
+                    company = await self.state.get_company(prospect.company_id)
+                except Exception as e:
+                    logger.debug(f"Scout: company lookup for country failed: {e}")
+            prospect.country = country_from_evidence(
+                linkedin_url=prospect.linkedin_url,
+                location=company.location if company else "",
+                domains=tuple(d for d in (
+                    prospect.email,
+                    company.domain if company else "",
+                    company.website if company else "",
+                    prospect.source_url,
+                ) if d),
+            )
+        return await self.state.add_prospect(prospect)
+
     async def _ensure_company(
         self,
         name: str,
@@ -1532,6 +1556,7 @@ Respond ONLY with the JSON array."""
                 website=info.get("website", f"https://{domain}"),
                 description=info.get("description", ""),
                 industry=default_industry,
+                location=str(row.get("location") or ""),
                 source="job_board",
                 source_url=str(row.get("job_url") or ""),
             )
@@ -1568,7 +1593,7 @@ Respond ONLY with the JSON array."""
         scored = await self._score_contacts(all_contacts)
         count = 0
         for prospect in scored:
-            await self.state.add_prospect(prospect)
+            await self._add_prospect(prospect)
             count += 1
             logger.info(
                 f"Scout: Added {prospect.full_name()} ({prospect.title}) "
