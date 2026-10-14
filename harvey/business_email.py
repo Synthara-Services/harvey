@@ -11,6 +11,7 @@ import re
 from html import unescape
 
 from harvey.hosts import is_free_mail, is_third_party_host
+from harvey.language import PLACES, fold
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 MAILTO_RE = re.compile(r"""href\s*=\s*["']mailto:([^"'?]+)""", re.I)
@@ -30,11 +31,41 @@ PREFERRED_LOCALS = (
     "shitje", "reception", "recepsion", "recepsioni",
 )
 # Never written to: nobody reads them, or writing there is not outreach.
+# Albanian: fatura (invoice), ankesa (complaints).
 BLOCKED_LOCALS = frozenset({
     "noreply", "no-reply", "no_reply", "donotreply", "do-not-reply",
     "careers", "career", "jobs", "job", "hr", "privacy", "abuse",
     "postmaster", "webmaster", "hostmaster", "mailer-daemon", "unsubscribe",
+    "dpo", "gdpr", "legal", "billing", "invoice", "fatura", "ankesa",
 })
+
+# A domain name that is a place or a generic word says nothing about which
+# business it belongs to: info@albania.al on beautifulalbania.al is not the
+# business's own address. Places come from harvey/language.py.
+GENERIC_LABELS = frozenset(
+    word for names in PLACES.values() for name in names for word in name.split()
+) | frozenset({
+    "albanian", "balkan", "balkans", "europe", "shqip",
+    "hotel", "hotels", "hostel", "travel", "travels", "tour", "tours",
+    "tourism", "turizem", "restaurant", "restorant", "restaurants", "cafe",
+    "bar", "food", "shop", "store", "dyqan", "market", "online", "group",
+    "grup", "home", "house", "info", "mail", "email", "web", "site",
+    "digital", "media", "design", "studio", "auto", "cars", "rent",
+    "dental", "clinic", "klinika", "beauty", "fitness", "service",
+    "services", "company", "business", "invest", "trade", "global",
+    "international",
+})
+
+# A web credit in a footer: the designer's address follows it, not the
+# business's. Matched on folded text (no ë or ç).
+WEB_CREDIT_RE = re.compile(
+    r"\b(designed by|developed by|powered by|website by|realizuar nga|"
+    r"zhvilluar nga|punuar nga)\b"
+)
+# Where a credit ends: a separator, or the business's own contact details.
+CREDIT_END_RE = re.compile(
+    r"[|•·©]|\b(contact|kontakt\w*|e-?mail|tel|phone|telefon\w*|adres\w*)\b")
+CREDIT_WINDOW = 80
 
 
 def decode_cloudflare(hex_string: str) -> str:
@@ -65,6 +96,35 @@ def extract_emails(html: str) -> list[str]:
     return out
 
 
+def _with_addresses_inline(html: str) -> str:
+    """The page with each mailto link and Cloudflare-protected address
+    replaced by the address itself, so text order shows where it sits."""
+    html = re.sub(
+        r"""<a\b[^>]*?href\s*=\s*["']mailto:([^"'?]+)[^>]*>.*?</a>""",
+        lambda m: f" {unescape(m.group(1))} ", html, flags=re.I | re.S)
+    html = re.sub(
+        r"""<(a|span)\b[^>]*?(?:data-cfemail\s*=\s*["']([0-9a-fA-F]+)["']|"""
+        r"""/cdn-cgi/l/email-protection#([0-9a-fA-F]+))[^>]*>.*?</\1>""",
+        lambda m: f" {decode_cloudflare(m.group(2) or m.group(3))} ", html,
+        flags=re.I | re.S)
+    return html
+
+
+def credit_addresses(html: str) -> set[str]:
+    """Addresses that sit in a web credit ("Designed by ...", "Realizuar
+    nga ..."): the web designer's, not the business's."""
+    text = re.sub(r"<[^>]+>", " ", _with_addresses_inline(html or ""))
+    text = " ".join(fold(unescape(text)).split())
+    found = set()
+    for credit in WEB_CREDIT_RE.finditer(text):
+        window = text[credit.end():credit.end() + CREDIT_WINDOW]
+        end = CREDIT_END_RE.search(window)
+        if end:
+            window = window[:end.start()]
+        found.update(a.strip(".,;:") for a in EMAIL_RE.findall(window))
+    return found
+
+
 def _label(host: str) -> str:
     """The name part of a domain: "berdicacement" for berdicacement.al."""
     parts = host.split(".")
@@ -83,6 +143,8 @@ def is_own_domain(email_domain: str, site_domain: str) -> bool:
     if is_third_party_host(email_domain) or is_free_mail(email_domain):
         return False
     a, b = _label(email_domain), _label(site_domain)
+    if min(a, b, key=len) in GENERIC_LABELS:
+        return False
     return len(a) >= 5 and len(b) >= 5 and (a in b or b in a)
 
 
@@ -90,15 +152,17 @@ def pick_business_email(pages: list[str], domain: str) -> str:
     """The best public address for the business at ``domain``, or "".
 
     An on-domain role mailbox first (info@, kontakt@, ...), then any other
-    on-domain address, then a free-mail address the site shows. Never a
-    no-reply, jobs or abuse mailbox, and never an address on another
-    company's or a platform's domain.
+    on-domain address, then a free-mail address the site shows, unless it
+    sits in a web credit. Never a no-reply, jobs or abuse mailbox, and never
+    an address on another company's or a platform's domain.
     """
     domain = (domain or "").lower()
     if not domain or is_third_party_host(domain):
         return ""
     candidates: list[str] = []
+    credits: set[str] = set()
     for html in pages:
+        credits |= credit_addresses(html)
         for addr in extract_emails(html):
             if addr not in candidates:
                 candidates.append(addr)
@@ -111,7 +175,7 @@ def pick_business_email(pages: list[str], domain: str) -> str:
             if local in PREFERRED_LOCALS:
                 return (0, PREFERRED_LOCALS.index(local))
             return (1, 0)
-        if is_free_mail(host):
+        if is_free_mail(host) and addr not in credits:
             return (2, 0)
         return None
 
