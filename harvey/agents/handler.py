@@ -644,7 +644,21 @@ The prospect's intent is: {intent}
 
 Write a reply that:"""
 
-        if intent == "interested":
+        offer = getattr(self.config.product, "offer", None)
+        booking_url = (getattr(offer, "booking_url", "") or "").strip()
+        if intent == "interested" and booking_url:
+            # The booking link goes only to someone who showed interest,
+            # never into first emails or follow-ups (see the writer).
+            duration = getattr(offer, "meeting_duration", "")
+            call = f"a call of {duration}" if duration else "a short call"
+            owner = getattr(offer, "meeting_owner", "") or self.config.persona.name
+            prompt += f"""
+- Acknowledges their interest warmly
+- Offers {call} with {owner} as the next step
+- Puts this booking link on its own line, exactly as written: {booking_url}
+- Does not propose specific times; the link lets them pick one
+- Keeps it short (under 80 words)"""
+        elif intent == "interested":
             prompt += """
 - Acknowledges their interest warmly
 - Suggests a specific next step (brief call or meeting)
