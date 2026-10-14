@@ -360,6 +360,7 @@ def cmd_export(args):
         if args.status:
             statuses = [s.strip() for s in args.status.split(",") if s.strip()]
 
+        business = getattr(args, "business", False)
         count, _ = await export_prospects_csv(
             state,
             out_path=out,
@@ -367,11 +368,16 @@ def cmd_export(args):
             min_score=args.min_score,
             statuses=statuses,
             include_all=args.all,
+            business_only=business,
         )
-        scope = "all prospects" if args.all else (
-            f"email status {email_statuses or ['verified', 'risky']}"
-            + (f", score >= {args.min_score}" if args.min_score else "")
-        )
+        if business:
+            scope = "businesses' own addresses, every email status" + (
+                f" in {email_statuses}" if email_statuses else "")
+        else:
+            scope = "all prospects" if args.all else (
+                f"email status {email_statuses or ['verified', 'risky']}"
+                + (f", score >= {args.min_score}" if args.min_score else "")
+            )
         print(f"\n  Exported {count} prospect(s) to {out}  ({scope})")
         if count == 0 and not args.all:
             print("  Tip: no deliverable emails yet? Add a REOON_API_KEY to .env so")
@@ -716,6 +722,9 @@ def main():
     )
     sub.add_argument("--out", default="",
                      help="Output file (default: prospects.csv, or call_list.csv)")
+    sub.add_argument("--business", action="store_true",
+                     help="Only businesses' own addresses (info@, a Gmail on their "
+                          "site), every email status")
     sub.add_argument("--call-list", action="store_true",
                      help="Businesses with no website, to call: name, category, "
                           "city, phone, rating, reviews")

@@ -26,6 +26,7 @@ from harvey.integrations.mail_provider import (
     outreach_footer,
     with_footer,
 )
+from harvey.greeting import business_greeting, person_greeting
 from harvey.language import language_for_country
 from harvey.state import StateManager
 
@@ -338,14 +339,29 @@ class Sender:
         await self._drain_due()
 
     def _render(self, text: str, prospect) -> str:
-        """Fill merge variables. The pre-send gate rejects any leftovers."""
-        replacements = {
-            "first_name": prospect.first_name,
-            "last_name": prospect.last_name,
-            "company": prospect.company,
-            "title": prospect.title,
-            "personalization": prospect.personalization_notes,
-        }
+        """Fill merge variables. The pre-send gate rejects any leftovers.
+
+        A business's own inbox has no person: {{greeting}} greets the
+        business, and a person's variables ({{first_name}}, {{title}}) are
+        left unfilled so the gate stops the email instead of sending
+        "Hi ,".
+        """
+        language = language_for_country(getattr(prospect, "country", ""))
+        if getattr(prospect, "is_business_address", False):
+            replacements = {
+                "greeting": business_greeting(prospect.company, language),
+                "company": prospect.company,
+                "personalization": prospect.personalization_notes,
+            }
+        else:
+            replacements = {
+                "greeting": person_greeting(prospect.first_name, language),
+                "first_name": prospect.first_name,
+                "last_name": prospect.last_name,
+                "company": prospect.company,
+                "title": prospect.title,
+                "personalization": prospect.personalization_notes,
+            }
         for key, value in replacements.items():
             text = text.replace("{{" + key + "}}", value or "")
             text = text.replace("{{ " + key + " }}", value or "")

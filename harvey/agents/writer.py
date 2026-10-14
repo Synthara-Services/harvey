@@ -20,6 +20,7 @@ from harvey.integrations.mail_provider import (
     outreach_footer,
     with_footer,
 )
+from harvey.greeting import business_greeting, with_greeting
 from harvey.language import LANGUAGE_NAMES, language_for_country
 from harvey.models.campaign import Campaign, EmailStep
 from harvey.state import DELIVERABLE_EMAIL_STATUSES, StateManager
@@ -191,11 +192,20 @@ class Writer:
 
     async def _write_personal_email(self, prospect) -> dict | None:
         """One grounded draft for one person. Facts in, one email out."""
-        facts = [
-            f"- Name: {prospect.full_name()}",
-            f"- Title: {prospect.title}",
-            f"- Company: {prospect.company}",
-        ]
+        business = prospect.is_business_address
+        language = language_for_country(prospect.country)
+        if business:
+            facts = [
+                f"- Recipient: {prospect.company}'s own inbox ({prospect.email}), "
+                "not a named person",
+                f"- Company: {prospect.company}",
+            ]
+        else:
+            facts = [
+                f"- Name: {prospect.full_name()}",
+                f"- Title: {prospect.title}",
+                f"- Company: {prospect.company}",
+            ]
         if prospect.industry:
             facts.append(f"- Industry: {prospect.industry}")
 
@@ -214,6 +224,7 @@ class Writer:
                 facts.append(
                     f"- Signal ({signal.get('type', 'signal')}): {signal.get('detail', '')}"
                 )
+            facts += await self._profile_facts(prospect.company_id, company)
         if prospect.personalization_notes:
             facts.append(f"- Research notes: {prospect.personalization_notes}")
 
@@ -244,10 +255,10 @@ or anything else:
 Requirements:
 - Under 75 words. One specific observation from the FACTS above, one
   question. No pitch, no product name.
-- Write the actual text (no merge variables — you know their name/company).
+- {self._recipient_rule(business)}
 - Subject: lowercase, 2-5 words.
 - Follow every STRICT EMAIL RULE above.{self._call_length_rule()}
-- Write it in {LANGUAGE_NAMES[language_for_country(prospect.country)]}.
+- Write it in {LANGUAGE_NAMES[language]}.
 
 Return ONLY JSON: {{"subject": "...", "body": "..."}}"""
 
@@ -261,13 +272,67 @@ Return ONLY JSON: {{"subject": "...", "body": "..."}}"""
         body = str(result.get("body") or "").strip()
         if not subject or not body:
             return None
+        if business:
+            body = with_greeting(body, business_greeting(prospect.company, language))
         return {"subject": subject[:120], "body": body[:2000]}
+
+    @staticmethod
+    def _recipient_rule(business: bool) -> str:
+        if business:
+            return ("This goes to the business's own inbox and you know no one's "
+                    "name: address the business (\"you\", \"your team\"), never a "
+                    "person, and invent no name. Do not write a greeting line; it "
+                    "is added for you. No merge variables.")
+        return "Write the actual text (no merge variables — you know their name/company)."
+
+    async def _profile_facts(self, company_id: str, company) -> list[str]:
+        """What the company's own website and listing showed, in plain words,
+        from its latest profile observations."""
+        facts = []
+        if getattr(company, "location", ""):
+            facts.append(f"- Where they are: {company.location}")
+        try:
+            rows = await self.state.get_observations(
+                company_id=company_id, latest_only=True)
+        except Exception as e:
+            logger.debug(f"Writer: observations for {company_id} failed: {e}")
+            rows = []
+        latest = {r["signal_code"]: r for r in rows}
+
+        def num(code):
+            return (latest.get(code) or {}).get("value_num")
+
+        def text(code):
+            return ((latest.get(code) or {}).get("value_text") or "").strip()
+
+        if num("NO_ONLINE_BOOKING") == 1:
+            facts.append("- Their website has no way to book or order online")
+        elif num("NO_ONLINE_BOOKING") == 0:
+            facts.append("- Their website already takes bookings online")
+        if num("RUNNING_GOOGLE_ADS") == 1:
+            facts.append("- They are running Google Ads")
+        if num("RUNNING_META_ADS") == 1:
+            facts.append("- They are running Facebook or Instagram ads")
+        rating, reviews = num("REVIEW_RATING"), num("REVIEW_COUNT")
+        if rating is not None and reviews:
+            facts.append(f"- Google rating {rating:g} from {int(reviews)} reviews")
+        if text("TECH_STACK"):
+            facts.append(f"- Their website is built with: {text('TECH_STACK')}")
+        if text("HIRING_ROLE"):
+            facts.append(f"- Hiring: {text('HIRING_ROLE')}")
+        if num("SITE_PAGE_COUNT"):
+            facts.append(f"- Their website has about {int(num('SITE_PAGE_COUNT'))} pages")
+        if text("CONTACT_FORM_URL"):
+            facts.append("- Their website has a contact form")
+        return facts
 
     async def _write_sequence(self, prospects: list) -> list[EmailStep]:
         """Ask the brain to write a 3-email sequence."""
         # Build context about the prospects
+        business = bool(prospects) and prospects[0].is_business_address
         prospect_summary = "\n".join(
-            f"- {p.full_name()}, {p.title} at {p.company}"
+            (f"- {p.company} ({p.industry or 'business'}), their own inbox"
+             if business else f"- {p.full_name()}, {p.title} at {p.company}")
             + (f" | Notes: {p.personalization_notes}" if p.personalization_notes else "")
             for p in prospects[:5]  # Show sample for context
         )
@@ -306,9 +371,7 @@ Requirements:
 - Email 1: Personalized cold observation + one question. Under 75 words. No pitch.
 - Email 2: Follow-up 3 days later. Different angle, one concrete proof point. Under 75 words.
 - Email 3: Break-up email 4 days after that. Under 40 words. Gracious, not guilt-tripping.
-- Use {{{{first_name}}}}, {{{{company}}}}, {{{{title}}}} as merge variables — every email
-  must use at least one, and email 1 must reference something specific to
-  these prospects' industry or role (use the notes above).
+{self._merge_variable_rule(business)}
 - Never be pushy or salesy. Be consultative and value-driven.
 - Subject lines: lowercase, 2-5 words.
 - Follow every rule in the STRICT EMAIL RULES above. No exceptions.{self._call_length_rule()}
@@ -326,7 +389,40 @@ Return ONLY a JSON array (no markdown fences, no commentary):
             prompt, session_id="harvey-writer",
             agent="writer", task="write_sequence",
         )
-        return self._parse_sequence(result)
+        steps = self._parse_sequence(result)
+        return self._business_sequence(steps) if business else steps
+
+    @staticmethod
+    def _merge_variable_rule(business: bool) -> str:
+        if business:
+            return (
+                "- These go to each business's own inbox, not to a named person.\n"
+                "  Start every email body with {{greeting}} on its own line (it\n"
+                "  becomes the right greeting), use {{company}} where the name helps,\n"
+                "  and never use {{first_name}}, {{last_name}} or {{title}}. Email 1\n"
+                "  must reference something specific to these businesses (use the\n"
+                "  notes above)."
+            )
+        return (
+            "- Use {{first_name}}, {{company}}, {{title}} as merge variables — every email\n"
+            "  must use at least one, and email 1 must reference something specific to\n"
+            "  these prospects' industry or role (use the notes above)."
+        )
+
+    @staticmethod
+    def _business_sequence(steps: list[EmailStep]) -> list[EmailStep]:
+        """Every step opens with {{greeting}}, and none uses a person's merge
+        variables. A sequence that still does is rejected rather than sent
+        to an inbox as "Hi ,"."""
+        for step in steps:
+            step.body = with_greeting(step.body, "{{greeting}}")
+            text = f"{step.subject}\n{step.body}"
+            if any(f"{{{{{v}}}}}" in text.replace(" ", "")
+                   for v in ("first_name", "last_name", "title")):
+                logger.warning(
+                    "Writer: business sequence used a person's merge variable; rejected.")
+                return []
+        return steps
 
     def _parse_sequence(self, result) -> list[EmailStep]:
         """Robustly coerce LLM output into a validated EmailStep list.
@@ -388,6 +484,10 @@ Return ONLY a JSON array (no markdown fences, no commentary):
             industry = prospect.industry or "general"
             language = language_for_country(prospect.country)
             key = f"{industry}-outreach" if language == "en" else f"{industry}-{language}-outreach"
+            # A business's own inbox gets its own sequence: greeted as the
+            # business, never with a person's merge variables.
+            if prospect.is_business_address:
+                key = key.replace("-outreach", "-business-outreach")
 
             if key not in batches:
                 batches[key] = []
