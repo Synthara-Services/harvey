@@ -275,7 +275,7 @@ harvey sending pause|resume  # Kill switch for all outbound
 ```
 
 ### Tests never touch the user's files
-`tests/conftest.py` points `data/`, `skills/` and `harvey.local.yaml` at a temporary folder (`HARVEY_SANDBOX`, read by `harvey/paths.py`) before anything imports harvey, and fails the run if any real file there changed, keeping a copy from before the run to restore from. Old code does not know the sandbox: run a mutation check against an older version in a separate checkout (`git worktree add`), never in the user's folder.
+`tests/conftest.py` points `data/`, `skills/` and `harvey.local.yaml` at a temporary folder (`HARVEY_SANDBOX`, read by `harvey/paths.py`) before anything imports harvey, and fails the run if any real file there changed, keeping a copy from before the run to restore from. Old code does not know the sandbox, so a mutation check against an older version never runs in the user's folder. No worktrees and no second checkout of this repo, ever: export that commit into a temporary folder in the session's scratchpad (`git archive <commit> | tar -x -C <folder>`), run it there with `PYTHONPATH=<folder>` so its own code is imported, and delete the folder afterwards.
 
 ### Common Issues
 - **"command not found: harvey"**: Activate venv first: `source .venv/bin/activate`
