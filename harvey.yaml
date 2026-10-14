@@ -67,3 +67,4 @@ usage:
     start: "22:00"
     end: "07:00"
     timezone: "America/New_York"
+  scout_serper_daily_searches: 20   # Serper searches the scout may use a day, then free engines; 0 = never

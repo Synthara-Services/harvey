@@ -50,6 +50,7 @@ DEFAULT_USAGE = {
     "max_daily_claude_percent": 80,
     "heartbeat_interval_minutes": 15,
     "quiet_hours": {"start": "22:00", "end": "07:00", "timezone": "America/New_York"},
+    "scout_serper_daily_searches": 20,
 }
 # Persona values in the shipped harvey.yaml. Training fills company and
 # tone from the site only while they still hold these; the sender's name,

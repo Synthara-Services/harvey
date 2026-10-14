@@ -146,6 +146,18 @@ class UsageConfig(BaseModel):
     max_daily_claude_percent: float = 80.0
     heartbeat_interval_minutes: int = 15
     quiet_hours: QuietHoursConfig = QuietHoursConfig()
+    # Serper searches the scout may make in a day. Discovery shares the same
+    # credits and gets a whole list of businesses per call, so the scout gets
+    # a small share and uses the free search engines once it is spent.
+    # 0 keeps the scout off Serper entirely.
+    scout_serper_daily_searches: int = 20
+
+    @field_validator("scout_serper_daily_searches")
+    @classmethod
+    def _searches_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("scout_serper_daily_searches must be >= 0")
+        return v
 
     @field_validator("max_daily_claude_percent")
     @classmethod
