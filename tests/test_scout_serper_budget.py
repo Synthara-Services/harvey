@@ -129,3 +129,26 @@ async def test_a_failed_serper_call_still_counts(state):
     scout._search_serper = failing
     await search(scout, 2)
     assert scout.calls == ["serper", "duckduckgo", "duckduckgo"]
+
+
+@pytest.mark.asyncio
+async def test_the_scout_asks_serper_for_10_results():
+    """A free account refuses 20 with a quoted query, and Serper never
+    returns more than 10 organic results anyway: 10 is one credit."""
+    sent = {}
+
+    class Response:
+        def json(self):
+            return {"organic": [{"link": f"https://r{i}.example/", "snippet": ""}
+                                for i in range(10)], "credits": 1}
+
+    async def fetch(url, method="GET", json_body=None, headers=None, retries=0, **kw):
+        sent.update(url=url, body=json_body, key=headers.get("X-API-KEY"))
+        return Response()
+
+    scout = object.__new__(Scout)
+    scout._fetch = fetch
+    results = await scout._search_serper('"tour operators" "Albania" company', "k")
+    assert sent["url"] == "https://google.serper.dev/search"
+    assert sent["body"] == {"q": '"tour operators" "Albania" company', "num": 10}
+    assert len(results) == 10

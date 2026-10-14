@@ -59,6 +59,10 @@ SCRAPE_TIMEOUT = 12.0
 MAX_RETRIES = 3
 BACKOFF_BASE = 1.5  # seconds; grows exponentially per attempt
 MAX_RESULTS_PER_QUERY = 20
+# Serper returns at most 10 organic results a search on any account, and
+# a free account refuses a request for more when the query has quotes
+# (measured 2026-10-14). 10 is one credit.
+SERPER_RESULTS_PER_QUERY = 10
 MAX_COMPANIES_PER_CYCLE = 10
 MAX_PROSPECTS_PER_CYCLE = 25
 
@@ -378,11 +382,11 @@ class Scout:
         return True
 
     async def _search_serper(self, query: str, api_key: str) -> list[tuple[str, str]]:
-        """Search via Serper.dev API — most reliable, $5/mo for 2.5k searches."""
+        """Search via Serper.dev API — most reliable, one credit a search."""
         resp = await self._fetch(
             "https://google.serper.dev/search",
             method="POST",
-            json_body={"q": query, "num": MAX_RESULTS_PER_QUERY},
+            json_body={"q": query, "num": SERPER_RESULTS_PER_QUERY},
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
             retries=2,
         )
