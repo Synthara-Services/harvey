@@ -224,7 +224,7 @@ Users will come back with questions and tasks. Common ones:
 - **"The emails aren't good"** → Edit `skills/email_frameworks.md` and `prompts/writer.md`. Show them the current rules and help them adjust.
 - **"Harvey isn't finding the right people"** → Check the ICP config in `harvey.yaml`. Adjust industries, titles, company_size, geography.
 - **"I want to change what Harvey says"** → Skills are in `skills/`, prompts are in `prompts/`. Both are plain markdown files. Edit them directly.
-- **"Train Harvey on a different product"** → `harvey train <new-url>`
+- **"Train Harvey on a different product"** → `harvey train <new-url>`. On an install that already has `harvey.local.yaml`, `skills/product_knowledge.md` or `skills/competitive_intel.md`, training never overwrites them: it writes `*.proposed` files next to them and prints what changed. Merge what the user wants by hand.
 - **"How do I see the database?"** → It's at `data/harvey.db`. They can open it with any SQLite tool, or ask you to query it.
 - **"I just want the prospect list"** → `harvey export` writes a sequencer-ready CSV (verified/risky emails only; `--all` for everything). Also available as Export buttons on the dashboard's Contacts tab. Harvey is valuable purely as a list-builder even if the user never lets it send.
 

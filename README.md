@@ -267,6 +267,8 @@ This is the main way you shape Harvey. If its emails are too pushy, edit `email_
 
 *(Both are gitignored. Your positioning and pricing shouldn't land in a public repo by accident.)*
 
+Re-training never overwrites them, or `harvey.local.yaml`, once they exist: they may carry your edits and comments. The new versions go next to them as `*.proposed` files (also gitignored), and training prints what changed. Merge what you want by hand.
+
 ### Which agent gets which
 
 Defined in `harvey/brain.py` — edit the map to change it.
