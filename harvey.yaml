@@ -68,3 +68,4 @@ usage:
     end: "07:00"
     timezone: "America/New_York"
   scout_serper_daily_searches: 20   # Serper searches the scout may use a day, then free engines; 0 = never
+  reoon_daily_checks: 20            # Reoon email checks a day, any kind; then no new verification until tomorrow

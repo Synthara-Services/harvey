@@ -151,12 +151,16 @@ class UsageConfig(BaseModel):
     # a small share and uses the free search engines once it is spent.
     # 0 keeps the scout off Serper entirely.
     scout_serper_daily_searches: int = 20
+    # Reoon checks a day, of any kind (named people and businesses' own
+    # addresses). About twice max_daily_sends, since some come back invalid.
+    # Once they are used, the scout verifies no new address until tomorrow.
+    reoon_daily_checks: int = 20
 
-    @field_validator("scout_serper_daily_searches")
+    @field_validator("scout_serper_daily_searches", "reoon_daily_checks")
     @classmethod
-    def _searches_non_negative(cls, v: int) -> int:
+    def _searches_non_negative(cls, v: int, info) -> int:
         if v < 0:
-            raise ValueError("scout_serper_daily_searches must be >= 0")
+            raise ValueError(f"{info.field_name} must be >= 0")
         return v
 
     @field_validator("max_daily_claude_percent")

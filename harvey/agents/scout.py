@@ -39,7 +39,7 @@ from harvey.brain import Brain
 from harvey.config import HarveyConfig, EnvConfig
 from harvey.business_email import pick_business_email
 from harvey.hosts import is_third_party_host
-from harvey.integrations.email_finder import find_email, verify_address
+from harvey.integrations.email_finder import ReoonBudget, find_email, verify_address
 from harvey.integrations.linkedin import LinkedInAutomation
 from harvey.language import country_from_evidence, fold
 from harvey.models.company import Company
@@ -423,6 +423,27 @@ class Scout:
             out.append((url, snippet))
         return out
 
+    def _reoon_budget(self) -> ReoonBudget:
+        usage = getattr(self.config, "usage", None)
+        return ReoonBudget(self.state, getattr(usage, "reoon_daily_checks", 20))
+
+    async def _can_verify(self) -> bool:
+        """Whether a Reoon check is left today. When none is, the scout
+        verifies no new address until tomorrow, and says so once a day.
+        Companies it skips stay unchecked, so tomorrow picks them up."""
+        if not getattr(self.env, "reoon_api_key", ""):
+            return True
+        budget = self._reoon_budget()
+        if await budget.left() > 0:
+            return True
+        today = date.today().isoformat()
+        if getattr(self, "_reoon_cap_logged", "") != today:
+            self._reoon_cap_logged = today
+            logger.info(
+                f"Scout: today's {budget.daily_cap} Reoon checks are used; "
+                "no new addresses are verified until tomorrow.")
+        return False
+
     async def _take_serper_search(self) -> bool:
         """Spend one of today's Serper searches, or report that none are left.
 
@@ -694,6 +715,10 @@ class Scout:
             domain = (company.get("domain") or "").strip()
             if not domain:
                 continue
+            # Out of Reoon checks: stop before the company is marked
+            # checked, so tomorrow's first round picks it up.
+            if not await self._can_verify():
+                break
 
             contacts = await self._contacts_from_company(
                 company_id=company["id"],
@@ -1188,6 +1213,7 @@ class Scout:
             result = await find_email(
                 first_name, last_name, domain,
                 verify=True, env=self.env, state=self.state,
+                reoon_budget=self._reoon_budget(),
             )
         except Exception as e:
             logger.debug(f"find_email failed for {domain}: {e}")
@@ -1552,6 +1578,10 @@ Respond ONLY with the JSON array."""
         """
         if is_third_party_host(domain):
             return []
+        # No Reoon check left today: the company keeps zero prospects, so
+        # the backfill reaches it tomorrow instead of saving unverified ones.
+        if not await self._can_verify():
+            return []
         try:
             team_members, pages = await self._crawl_site(domain)
         except Exception as e:
@@ -1634,7 +1664,8 @@ Respond ONLY with the JSON array."""
         if not prospect.is_valid() or await self._is_duplicate_prospect(prospect):
             return None
         try:
-            prospect.email_status = await verify_address(email, env=self.env)
+            prospect.email_status = await verify_address(
+                email, env=self.env, reoon_budget=self._reoon_budget())
         except Exception as e:
             logger.debug(f"verify_address failed for {email}: {e}")
             prospect.email_status = "guess"
