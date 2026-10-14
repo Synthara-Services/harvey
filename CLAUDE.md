@@ -228,6 +228,7 @@ Users will come back with questions and tasks. Common ones:
 - **"Train Harvey on a different product"** → `harvey train <new-url>`. On an install that already has `harvey.local.yaml`, `skills/product_knowledge.md` or `skills/competitive_intel.md`, training never overwrites them: it writes `*.proposed` files next to them and prints what changed. Merge what the user wants by hand.
 - **"How do I see the database?"** → It's at `data/harvey.db`. They can open it with any SQLite tool, or ask you to query it.
 - **"I just want the prospect list"** → `harvey export` writes a sequencer-ready CSV (verified/risky emails only; `--all` for everything). Also available as Export buttons on the dashboard's Contacts tab. Harvey is valuable purely as a list-builder even if the user never lets it send.
+- **"Who has no website?"** → `harvey export --call-list` writes `call_list.csv`: every business discovered with no website of its own (name, category, city, phone, rating, reviews), by city and most reviewed first. Harvey can't email them, but they can be called.
 
 ---
 
@@ -267,6 +268,7 @@ harvey status                # Pipeline summary
 harvey usage                 # Claude quota gauges + per-agent token usage (no dollar costs — subscription plans aren't billed per token)
 harvey export                # Deliverable prospects → sequencer-ready CSV (prospects.csv)
 harvey export --all          # Full raw list, no filters
+harvey export --call-list    # Businesses with no website, to phone → call_list.csv
 harvey gmail auth            # One-time Gmail OAuth (when provider: gmail)
 harvey gmail test            # Verify the Gmail connection
 harvey outbox                # Review queued emails; --approve <id> / --approve-all / --reject <id>

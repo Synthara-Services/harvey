@@ -418,6 +418,7 @@ harvey status                # pipeline summary
 harvey usage                 # active provider's quota + per-agent tokens
 harvey outbox                # review queued email
 harvey export                # deliverable prospects → CSV
+harvey export --call-list    # businesses with no website, to phone → call_list.csv
 harvey sending pause|resume  # kill switch
 harvey gmail auth            # one-time Gmail OAuth
 ```

@@ -333,14 +333,26 @@ def cmd_usage(args):
 
 
 def cmd_export(args):
-    """Export the prospect list as a sequencer-ready CSV."""
+    """Export the prospect list as a sequencer-ready CSV, or the call list."""
     from harvey.state import StateManager
-    from harvey.export import export_prospects_csv
+    from harvey.export import export_call_list_csv, export_prospects_csv
 
     async def _export():
         state = StateManager()
         await state.init_db()
 
+        if getattr(args, "call_list", False):
+            out = args.out or "call_list.csv"
+            count, _ = await export_call_list_csv(state, out_path=out)
+            print(f"\n  Exported {count} business(es) with no website to {out}")
+            if count == 0:
+                print("  None yet. A listings provider finds them, e.g.")
+                print("  harvey discover --provider serper_maps\n")
+            else:
+                print("  Columns: name, category, city, phone, rating, reviews.\n")
+            return
+
+        out = args.out or "prospects.csv"
         email_statuses = None
         if args.email_status:
             email_statuses = [s.strip() for s in args.email_status.split(",") if s.strip()]
@@ -350,7 +362,7 @@ def cmd_export(args):
 
         count, _ = await export_prospects_csv(
             state,
-            out_path=args.out,
+            out_path=out,
             email_statuses=email_statuses,
             min_score=args.min_score,
             statuses=statuses,
@@ -360,7 +372,7 @@ def cmd_export(args):
             f"email status {email_statuses or ['verified', 'risky']}"
             + (f", score >= {args.min_score}" if args.min_score else "")
         )
-        print(f"\n  Exported {count} prospect(s) to {args.out}  ({scope})")
+        print(f"\n  Exported {count} prospect(s) to {out}  ({scope})")
         if count == 0 and not args.all:
             print("  Tip: no deliverable emails yet? Add a REOON_API_KEY to .env so")
             print("  Harvey can verify addresses, or use --all for the raw list.\n")
@@ -696,7 +708,11 @@ def main():
     sub = subparsers.add_parser(
         "export", help="Export prospects as a sequencer-ready CSV"
     )
-    sub.add_argument("--out", default="prospects.csv", help="Output file (default: prospects.csv)")
+    sub.add_argument("--out", default="",
+                     help="Output file (default: prospects.csv, or call_list.csv)")
+    sub.add_argument("--call-list", action="store_true",
+                     help="Businesses with no website, to call: name, category, "
+                          "city, phone, rating, reviews")
     sub.add_argument(
         "--email-status", default="",
         help="Comma-separated statuses to include (default: verified,risky)",
