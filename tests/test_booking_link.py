@@ -16,7 +16,7 @@ from harvey.models.prospect import Prospect
 BOOKING_URL = "https://calendar.example.com/book/abc123"
 
 
-def make_cfg(booking_url=BOOKING_URL):
+def make_cfg(booking_url=BOOKING_URL, meeting_owner="Jane Roe"):
     class Cfg:
         class persona:
             name = "Jane Roe"; email = "jane@example.com"; company = "Example Co"
@@ -27,7 +27,7 @@ def make_cfg(booking_url=BOOKING_URL):
             objection_responses = {}
             offer = SimpleNamespace(
                 booking_method="calendar_link", booking_url=booking_url,
-                meeting_duration="30 minutes", meeting_owner="Jane Roe",
+                meeting_duration="30 minutes", meeting_owner=meeting_owner,
             )
 
         class channels:
@@ -81,14 +81,15 @@ def prospect():
     )
 
 
-async def reply_prompt(intent, booking_url=BOOKING_URL):
+async def reply_prompt(intent, booking_url=BOOKING_URL, meeting_owner="Jane Roe", thread=None):
     from harvey.agents.handler import Handler
     brain = RecordingBrain()
-    handler = Handler(brain=brain, state=None, config=make_cfg(booking_url), env=Env())
+    cfg = make_cfg(booking_url, meeting_owner)
+    handler = Handler(brain=brain, state=None, config=cfg, env=Env())
     handler.skills = brain.load_skills_for_agent("handler")
     convo = Conversation(
         id="c1", prospect_id="p1",
-        thread=[Message(sender="prospect", content="Sounds interesting, can we talk Thursday?")],
+        thread=thread or [Message(sender="prospect", content="Sounds interesting, can we talk Thursday?")],
     )
     await handler._generate_response(intent, convo.thread[-1].content, prospect(), convo)
     assert len(brain.prompts) == 1
@@ -99,8 +100,25 @@ async def reply_prompt(intent, booking_url=BOOKING_URL):
 async def test_interested_reply_offers_the_call_with_the_exact_link():
     prompt = await reply_prompt("interested")
     assert BOOKING_URL in prompt
-    assert "a call of 30 minutes with Jane Roe" in prompt
+    assert "a call of 30 minutes with you" in prompt
     assert "on its own line" in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_sender_offers_the_call_in_the_first_person():
+    # meeting_owner is the persona (or empty): "a call with me", never
+    # "a call with Jane Roe" in an email Jane Roe sends.
+    for owner in ("Jane Roe", " jane roe ", ""):
+        prompt = await reply_prompt("interested", meeting_owner=owner)
+        assert '"a call with me"' in prompt
+        assert "with Jane Roe" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_colleague_who_takes_the_call_is_named():
+    prompt = await reply_prompt("interested", meeting_owner="Sam Lee")
+    assert "a call of 30 minutes with Sam Lee" in prompt
+    assert "a call with me" not in prompt
 
 
 def test_a_reply_with_the_link_and_signature_passes_the_pre_send_gate():

@@ -611,8 +611,9 @@ Respond with ONLY the category label, nothing else."""
     ) -> str:
         """Generate an appropriate response based on intent."""
         # Build conversation history for context
+        persona = self.config.persona
         history = "\n".join(
-            f"{'Harvey' if m.sender == 'harvey' else prospect.full_name()}: {m.content}"
+            f"{persona.name if m.sender == 'harvey' else prospect.full_name()}: {m.content}"
             for m in convo.thread[-6:]  # Last 6 messages for context
         )
 
@@ -624,10 +625,16 @@ Respond with ONLY the category label, nothing else."""
                     objection_context = f"\nSuggested approach for this objection: {response}"
                     break
 
-        prompt = self.brain.load_prompt("handler", stage=convo.stage)
+        prompt = self.brain.load_prompt(
+            "handler",
+            stage=convo.stage,
+            persona_name=persona.name,
+            persona_role=persona.role,
+            persona_company=persona.company,
+        )
         if not prompt:
-            prompt = f"""You are {self.config.persona.name}, {self.config.persona.role} at {self.config.persona.company}.
-Your tone is: {self.config.persona.tone}
+            prompt = f"""You are {persona.name}, {persona.role} at {persona.company}.
+Your tone is: {persona.tone}
 Product: {self.config.product.name} — {self.config.product.description}"""
 
         # Inject objection handling + sales methodology skills
@@ -651,10 +658,16 @@ Write a reply that:"""
             # never into first emails or follow-ups (see the writer).
             duration = getattr(offer, "meeting_duration", "")
             call = f"a call of {duration}" if duration else "a short call"
-            owner = getattr(offer, "meeting_owner", "") or self.config.persona.name
+            owner = (getattr(offer, "meeting_owner", "") or "").strip()
+            if not owner or owner.casefold() == persona.name.strip().casefold():
+                # The sender takes the call: "a call with me", never their
+                # own name in the third person.
+                with_whom = 'with you ("a call with me", never your own name)'
+            else:
+                with_whom = f"with {owner}"
             prompt += f"""
 - Acknowledges their interest warmly
-- Offers {call} with {owner} as the next step
+- Offers {call} {with_whom} as the next step
 - Puts this booking link on its own line, exactly as written: {booking_url}
 - Does not propose specific times; the link lets them pick one
 - Keeps it short (under 80 words)"""
