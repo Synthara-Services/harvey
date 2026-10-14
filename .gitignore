@@ -60,3 +60,8 @@ harvey.local.yaml
 
 # Proposals from re-training (harvey train): your product details, never commit
 *.proposed
+
+# Exports `harvey export` writes to the repo root by default: prospect and
+# call lists, never commit
+/prospects.csv
+/call_list.csv

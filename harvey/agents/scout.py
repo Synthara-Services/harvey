@@ -99,6 +99,8 @@ def _who(prospect: Prospect) -> str:
     return f"{prospect.full_name()} ({prospect.title})"
 
 
+# Settings key holding where a search rotation stopped last round.
+SEARCH_CURSOR_KEY = "scout_search_cursor:{name}"
 # Settings key counting the scout's Serper searches on one day.
 SERPER_SEARCHES_KEY = "scout_serper_searches:{day}"
 # Delay between search requests (seconds)
@@ -422,6 +424,28 @@ class Scout:
             seen.add(norm)
             out.append((url, snippet))
         return out
+
+    def _search_pairs(self) -> list[tuple[str, str]]:
+        """Every (industry, country) pair, country by country in ICP order:
+        the first countries come round first, and every one gets its turn."""
+        industries = list(self.config.icp.industries) or [""]
+        countries = list(self.config.icp.geography) or [""]
+        return [(industry, country) for country in countries for industry in industries]
+
+    async def _next_in_rotation(self, name: str, items: list, n: int) -> list:
+        """The next ``n`` items, carrying on where the last round stopped and
+        wrapping round at the end. The position is kept in the settings
+        table, so a restart carries on too."""
+        if not items or n <= 0:
+            return []
+        key = SEARCH_CURSOR_KEY.format(name=name)
+        try:
+            start = int(await self.state.get_setting(key, "0") or 0) % len(items)
+        except ValueError:
+            start = 0
+        picked = [items[(start + i) % len(items)] for i in range(min(n, len(items)))]
+        await self.state.set_setting(key, str((start + len(picked)) % len(items)))
+        return picked
 
     def _reoon_budget(self) -> ReoonBudget:
         usage = getattr(self.config, "usage", None)
@@ -853,8 +877,8 @@ class Scout:
         logger.info("Scout: Searching for LinkedIn profiles...")
         count = 0
 
-        geo = self.config.icp.geography[0] if self.config.icp.geography else ""
-        industry = self.config.icp.industries[0] if self.config.icp.industries else ""
+        industry, geo = (await self._next_in_rotation(
+            "profiles", self._search_pairs(), 1))[0]
 
         for title in self.config.icp.titles:
             if self._queries_this_cycle >= MAX_QUERIES_PER_CYCLE:
@@ -1000,7 +1024,8 @@ class Scout:
         """Find ICP-matching companies via web search."""
         companies = []
 
-        for query in self._build_company_search_queries():
+        targets = await self._next_in_rotation("companies", self._search_pairs(), 2)
+        for query in self._build_company_search_queries(targets):
             if self._queries_this_cycle >= MAX_QUERIES_PER_CYCLE:
                 break
 
@@ -1042,7 +1067,7 @@ class Scout:
             return []
 
         directory_queries = []
-        for industry in industries[:2]:
+        for industry in await self._next_in_rotation("directories", list(industries), 2):
             directory_queries.extend([
                 f'site:g2.com/categories "{industry}"',
                 f'site:clutch.co "{industry}" companies',
@@ -1164,16 +1189,23 @@ class Scout:
         seen = set()
         return [d for d in domains if not (d in seen or seen.add(d))][:5]
 
-    def _build_company_search_queries(self) -> list[str]:
-        """Build search queries to find ICP-matching companies."""
+    def _build_company_search_queries(
+        self, targets: list[tuple[str, str]] | None = None
+    ) -> list[str]:
+        """Build search queries to find ICP-matching companies.
+
+        ``targets`` are (industry, country) pairs, normally the next ones in
+        the rotation; without them, the first two industries in the first
+        country.
+        """
         queries = []
-        industries = self.config.icp.industries or [""]
-        geos = self.config.icp.geography or [""]
+        if targets is None:
+            industries = self.config.icp.industries or [""]
+            geos = self.config.icp.geography or [""]
+            targets = [(industry, geos[0]) for industry in industries[:2]]
         size = self.config.icp.company_size or ""
 
-        for industry in industries[:2]:
-            geo = geos[0] if geos else ""
-
+        for industry, geo in targets:
             parts = []
             if industry:
                 parts.append(f'"{industry}"')
@@ -1692,7 +1724,8 @@ Respond ONLY with the JSON array."""
         if not keywords:
             return 0
         search_term = keywords[0]
-        geo = self.config.icp.geography[0] if self.config.icp.geography else ""
+        geo = (await self._next_in_rotation(
+            "job_boards", list(self.config.icp.geography) or [""], 1))[0]
 
         logger.info(f"Scout: Searching job boards for '{search_term}' roles...")
         loop = asyncio.get_event_loop()
