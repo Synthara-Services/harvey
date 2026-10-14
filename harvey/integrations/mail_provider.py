@@ -14,6 +14,7 @@ it isn't a MailProvider because Instantly owns sequencing/sending itself.
 """
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
@@ -56,6 +57,78 @@ def looks_like_bounce(from_email: str, subject: str) -> bool:
     f = (from_email or "").lower()
     s = (subject or "").lower()
     return any(m in f for m in BOUNCE_SENDERS) or any(m in s for m in BOUNCE_SUBJECTS)
+
+
+def with_footer(body: str, footer: str) -> str:
+    """Append the configured footer after a blank line, once."""
+    body = (body or "").rstrip()
+    footer = (footer or "").strip()
+    if not footer or body.endswith(footer):
+        return body
+    return f"{body}\n\n{footer}"
+
+
+# Where a quoted copy of an earlier email starts, in the languages Harvey's
+# prospects write in (English, Albanian, Italian, German). Either an
+# attribution line ending in "wrote:" (German puts the name between
+# "schrieb" and the colon) or an Outlook From/Sent header block.
+QUOTE_ATTRIBUTION_RE = re.compile(
+    r"\b(wrote|shkroi|ha scritto|schrieb)\b[^\n]*:\s*$", re.IGNORECASE
+)
+# A Gmail attribution wrapped over two lines starts with one of these.
+QUOTE_ATTRIBUTION_OPENER_RE = re.compile(r"^\s*(On|Më|Me|Il|Am)\s", re.IGNORECASE)
+OUTLOOK_HEADER_LABELS = (
+    ("from:", "sent:"),
+    ("nga:", "dërguar:"),
+    ("da:", "inviato:"),
+    ("von:", "gesendet:"),
+)
+QUOTE_SEPARATOR_RE = re.compile(r"^\s*(_{5,}|-{5,}.*)\s*$")
+
+
+def _quote_start(lines: list[str]) -> int | None:
+    """Index of the first line of a quoted-reply header, or None."""
+    for i, line in enumerate(lines):
+        if QUOTE_ATTRIBUTION_RE.search(line):
+            prev = lines[i - 1] if i else ""
+            wrapped = bool(
+                not QUOTE_ATTRIBUTION_OPENER_RE.match(line)
+                and QUOTE_ATTRIBUTION_OPENER_RE.match(prev)
+            )
+            header = f"{prev} {line}" if wrapped else line
+            # A real attribution carries a date or an address; a prospect's
+            # own "as my colleague wrote:" does not.
+            if re.search(r"[@\d]", header):
+                return i - 1 if wrapped else i
+        label = line.strip().lstrip("*").lower()
+        for from_label, sent_label in OUTLOOK_HEADER_LABELS:
+            if label.startswith(from_label) and any(
+                nxt.strip().lstrip("*").lower().startswith(sent_label)
+                for nxt in lines[i + 1:i + 4]
+            ):
+                return i
+    return None
+
+
+def strip_quoted_reply(text: str, footer: str = "") -> str:
+    """The part of a reply the prospect actually wrote.
+
+    Drops our own footer (exact match), lines starting with ">", and
+    everything from a quoted-reply header onward, so a phrase quoted from
+    our own email can never decide the prospect's intent.
+    """
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    footer = (footer or "").replace("\r\n", "\n").strip()
+    if footer:
+        text = text.replace(footer, "")
+    lines = text.split("\n")
+    cut = _quote_start(lines)
+    if cut is not None:
+        lines = lines[:cut]
+    lines = [line for line in lines if not line.lstrip().startswith(">")]
+    while lines and (not lines[-1].strip() or QUOTE_SEPARATOR_RE.match(lines[-1])):
+        lines.pop()
+    return "\n".join(lines).strip()
 
 
 class MailProvider(ABC):

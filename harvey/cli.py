@@ -427,8 +427,9 @@ def cmd_outbox(args):
             print(f"\n  [{item['id']}] step {item['step']} ({item['kind']}) "
                   f"→ {item['to_email']}  (send {item['send_at'][:16]})")
             print(f"  Subject: {item['subject']}")
-            body_preview = (item["body"][:200] + "...") if len(item["body"]) > 200 else item["body"]
-            for line in body_preview.splitlines():
+            # The full body, footer included: what is approved here is
+            # exactly what gets sent.
+            for line in item["body"].splitlines():
                 print(f"    {line}")
         if pending:
             print("\n  Approve: harvey outbox --approve <id>   |   all: harvey outbox --approve-all")

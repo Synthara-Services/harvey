@@ -85,6 +85,10 @@ class EmailChannelConfig(BaseModel):
     # Kill switch: pause all sending when bounces exceed this fraction of
     # sent mail (measured over the trailing sends). 0 disables the switch.
     max_bounce_rate: float = 0.05
+    # Plain-text block appended to every native email (Gmail API and SMTP
+    # sends carry no mailbox signature). Added when the email is staged, so
+    # the Outbox shows exactly what will be sent.
+    footer: str = ""
 
     @field_validator("max_daily_sends")
     @classmethod

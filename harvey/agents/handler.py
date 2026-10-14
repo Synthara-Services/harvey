@@ -13,7 +13,12 @@ from datetime import datetime, timezone
 from harvey.brain import Brain, BrainUnavailable
 from harvey.config import HarveyConfig, EnvConfig
 from harvey.integrations.instantly import InstantlyClient
-from harvey.integrations.mail_provider import NATIVE_PROVIDERS, get_mail_provider
+from harvey.integrations.mail_provider import (
+    NATIVE_PROVIDERS,
+    get_mail_provider,
+    strip_quoted_reply,
+    with_footer,
+)
 from harvey.models.conversation import Conversation, Message
 from harvey.state import StateManager
 
@@ -221,10 +226,21 @@ class Handler:
         except Exception as e:
             logger.debug(f"Handler: outbox cancel failed: {e}")
 
-        # 1. Classify intent. Hard keyword checks run FIRST and override
-        # the LLM — opt-outs and legal threats must never be missed.
+        # 1. Classify intent on what the prospect wrote, never on the quoted
+        # copy of our own email: a phrase quoted from it must not decide.
+        raw_text = reply_text
+        reply_text = strip_quoted_reply(
+            raw_text, getattr(self.config.channels.email, "footer", "")
+        )
+        # Hard keyword checks run FIRST and override the LLM — opt-outs and
+        # legal threats must never be missed.
         text_lower = reply_text.lower()
-        if any(p in text_lower for p in OPT_OUT_PATTERNS):
+        if not reply_text:
+            # Nothing above the quote (a blank reply, or answers written
+            # inside it): a human reads what arrived, nothing is guessed.
+            intent = "escalate"
+            reply_text = raw_text
+        elif any(p in text_lower for p in OPT_OUT_PATTERNS):
             intent = "unsubscribe"
         elif any(p in text_lower for p in ESCALATION_PATTERNS):
             intent = "escalate"
@@ -483,7 +499,9 @@ class Handler:
             kind="reply",
             to_email=prospect.email,
             subject=subject or "Re: your note",
-            body=response,
+            body=with_footer(
+                response, getattr(self.config.channels.email, "footer", "")
+            ),
             send_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             status="pending_review" if require_approval else "approved",
             provider=self.provider.name if self.provider else "",
