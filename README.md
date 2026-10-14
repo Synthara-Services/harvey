@@ -207,6 +207,7 @@ harvey discover               # go
 | **DataForSEO Business Listings** | $0.372 / 1,000 | $1 credit | Local trades, clinics, contractors. Phone, domain, rating, claimed status — and it can filter for businesses with **no website at all**. |
 | **DataForSEO SERP** | $0.0018 / search | $1 credit + free sandbox | Rank as the buying signal. |
 | **Serper** | ~$0.30–1.00 / 1,000 | 2,500 free, no card | The easiest paid one to try. |
+| **Serper Maps** | 3 credits a search, up to 20 businesses | 2,500 free credits, no card | Google Maps listings on the same key: name, category, phone, rating, review count, and a website or none. A social profile or booking-platform page counts as no website. One page of up to 20 per search. |
 
 Cities geocode themselves (cached forever, one lookup each). Directories, aggregators and institutions are filtered by pattern, not a blocklist — `en.wikipedia.org` and `biz.yelp.com` never make it in.
 

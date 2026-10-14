@@ -518,13 +518,17 @@ def cmd_discover(args):
 
         report = await run_discovery(state, config, args.provider, queries,
                                      max_spend=args.max_spend, dry_run=True)
-        print(f"\n  {len(queries)} queries via {PROVIDERS[args.provider].label}")
+        provider = PROVIDERS[args.provider]
+        radius = provider.kind == "listings" and provider.needs_coordinates
+        print(f"\n  {len(queries)} queries via {provider.label}")
         for q in queries[:8]:
-            print(f"    - {q.keyword()}" + ("" if q.coordinate else
+            print(f"    - {q.keyword()}" + ("" if q.coordinate or not radius else
                   "   (no coordinates — add icp.geo_coordinates for radius search)"))
         if len(queries) > 8:
             print(f"    ... and {len(queries) - 8} more")
-        print(f"\n  Estimated cost: ${report.estimated_cost:.4f}"
+        credits = ("" if report.estimated_credits is None
+                   else f" ({report.estimated_credits} credits)")
+        print(f"\n  Estimated cost: ${report.estimated_cost:.4f}{credits}"
               f"   (cap: ${args.max_spend:.2f})")
 
         if args.estimate:
@@ -545,7 +549,9 @@ def cmd_discover(args):
               f"{r.get('known_companies', 0)} already known")
         print(f"    {r.get('junk', 0)} filtered out as directories/aggregators")
         print(f"    {r.get('observations', 0)} observations recorded")
-        print(f"    actual cost: ${r.get('actual_cost', 0):.4f}")
+        credits_used = (f" ({r['credits_used']} credits)"
+                        if r.get("estimated_credits") is not None else "")
+        print(f"    actual cost: ${r.get('actual_cost', 0):.4f}{credits_used}")
         if r.get("stopped"):
             print(f"    stopped early: {r['stopped']}")
 
