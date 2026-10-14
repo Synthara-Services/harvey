@@ -121,3 +121,76 @@ async def export_prospects_csv(
             f.write(text)
         logger.info(f"Exported {len(rows)} prospects to {out_path}")
     return len(rows), text
+
+
+# ── Call list: businesses with no website ──
+# No website means no address Harvey can email, but the listing still has a
+# phone, and for anyone who builds websites this is the warmest list there is.
+
+CALL_LIST_COLUMNS = ["name", "category", "city", "phone", "rating", "reviews"]
+
+
+def _latest(code: str) -> str:
+    """SQL for a company's most recent value of one signal."""
+    return (
+        "(SELECT o.value_num FROM observations o "
+        f"WHERE o.company_id = c.id AND o.signal_code = '{code}' "
+        "ORDER BY o.observed_at DESC, o.rowid DESC LIMIT 1)"
+    )
+
+
+async def collect_call_list(state: StateManager) -> list[dict]:
+    """Every company observed with no website, by city, most reviewed first.
+
+    Rating and reviews are the latest observation of each, so a later
+    discovery run updates them rather than adding a second row.
+    """
+    import aiosqlite
+
+    sql = f"""
+        SELECT c.name, c.industry AS category, c.location AS city, c.phone,
+               {_latest('REVIEW_RATING')} AS rating,
+               {_latest('REVIEW_COUNT')} AS reviews
+        FROM companies c
+        WHERE COALESCE(c.website, '') = ''
+          AND EXISTS (SELECT 1 FROM observations o
+                      WHERE o.company_id = c.id AND o.signal_code = 'NO_WEBSITE')
+        ORDER BY c.location, reviews DESC, c.name
+    """
+    async with aiosqlite.connect(state.db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(sql) as cursor:
+            rows = [dict(r) for r in await cursor.fetchall()]
+
+    return [
+        {
+            "name": r["name"] or "",
+            "category": r["category"] or "",
+            "city": r["city"] or "",
+            "phone": r["phone"] or "",
+            "rating": "" if r["rating"] is None else f"{r['rating']:g}",
+            "reviews": "" if r["reviews"] is None else int(r["reviews"]),
+        }
+        for r in rows
+    ]
+
+
+async def export_call_list_csv(
+    state: StateManager, out_path: str | None = None
+) -> tuple[int, str]:
+    """Export the call list to CSV. Returns (row_count, csv_text).
+
+    The file is UTF-8 with a byte-order mark, so spreadsheet apps show
+    "Durrës" and "Shkodër" as written.
+    """
+    rows = await collect_call_list(state)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=CALL_LIST_COLUMNS)
+    writer.writeheader()
+    writer.writerows(rows)
+    text = buf.getvalue()
+    if out_path:
+        with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
+            f.write(text)
+        logger.info(f"Exported {len(rows)} businesses to call to {out_path}")
+    return len(rows), text
