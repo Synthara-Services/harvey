@@ -605,3 +605,64 @@ def test_harvey_export_business_flag(tmp_path, capsys):
     cli.cmd_export(args)
     assert out.exists()
     assert "businesses' own addresses" in capsys.readouterr().out
+
+
+# ── Guards (#36) ──
+
+
+@pytest.mark.parametrize("email_domain,site,own", [
+    ("albania.al", "beautifulalbania.al", False),     # a place, not the business
+    ("kosova.com", "visitkosova.com", False),
+    ("tirana.al", "hoteltirana.al", False),
+    ("hotel.al", "hotelmira.al", False),               # a generic word
+    ("travel.al", "mirotravel.al", False),
+    ("restaurant.al", "restaurantmira.al", False),
+    ("berdica.al", "berdicacement.al", True),          # still a real sibling
+    ("hotelmira.al", "hotelmirasarande.al", True),
+])
+def test_the_sibling_rule_skips_places_and_generic_words(email_domain, site, own):
+    assert is_own_domain(email_domain, site) is own
+
+
+def test_info_at_a_place_domain_is_not_the_business():
+    assert pick_business_email(["info@albania.al"], "beautifulalbania.al") == ""
+
+
+@pytest.mark.parametrize("local", ["dpo", "gdpr", "legal", "billing", "invoice",
+                                   "fatura", "ankesa"])
+def test_more_mailboxes_are_never_written_to(local):
+    assert pick_business_email([f"{local}@hotelmira.al"], "hotelmira.al") == ""
+    assert pick_business_email([f"{local}@hotelmira.al info@hotelmira.al"],
+                               "hotelmira.al") == "info@hotelmira.al"
+
+
+@pytest.mark.parametrize("footer", [
+    "Designed by Arben Krasniqi webdev.arben@gmail.com",
+    "Developed by <a href='mailto:webdev.arben@gmail.com'>Arben</a>",
+    "Website by: webdev.arben@gmail.com",
+    "Powered by Studio A — webdev.arben@gmail.com",
+    "Realizuar nga webdev.arben@gmail.com",
+    "Zhvilluar nga Studio A, webdev.arben@gmail.com",
+    "Punuar nga <a href='mailto:webdev.arben@gmail.com'>Studio A</a>",
+    f"Realizuar nga <a href='/cdn-cgi/l/email-protection#{cf('webdev.arben@gmail.com')}'>x</a>",
+    "Përshëndetje! Realizuar nga Studio Ë webdev.arben@gmail.com",
+])
+def test_a_web_designers_free_mail_in_a_credit_is_never_taken(footer):
+    page = f"<p>Na gjeni në Sarandë.</p><footer>{footer}</footer>"
+    assert pick_business_email([page], "hotelmira.al") == ""
+
+
+def test_the_business_free_mail_beside_a_credit_is_still_taken():
+    page = ("<p>Na shkruani: hotel.mira@gmail.com</p>"
+            "<footer>Website by webdev.arben@gmail.com</footer>")
+    assert pick_business_email([page], "hotelmira.al") == "hotel.mira@gmail.com"
+
+
+def test_powered_by_wordpress_does_not_hide_the_contact_address():
+    page = "<footer>Powered by WordPress | Kontakt: hotel.mira@gmail.com</footer>"
+    assert pick_business_email([page], "hotelmira.al") == "hotel.mira@gmail.com"
+
+
+def test_an_on_domain_address_after_a_credit_is_still_the_business():
+    page = "<footer>Powered by WordPress info@hotelmira.al</footer>"
+    assert pick_business_email([page], "hotelmira.al") == "info@hotelmira.al"
