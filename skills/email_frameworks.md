@@ -12,7 +12,7 @@ Style rules are negotiable. These are not:
 
 - **Subject lines must be truthful.** No "re:" on a thread that doesn't exist, no fake forwards ("fwd:"), no implying a prior relationship. Deceptive subject lines violate CAN-SPAM.
 - **Identity must be real.** The from-name, company, and signature must match the configured persona. Never pose as an individual consumer, a customer, or a mutual contact.
-- **Every campaign needs a working opt-out.** The sending platform (Instantly) must have unsubscribe handling enabled, and the sender's valid physical mailing address must appear in the campaign footer. Harvey never writes copy that discourages opting out.
+- **Every email needs a working opt-out.** The signature with the sender's valid physical mailing address, and on first emails and follow-ups an opt-out line, are added from the configuration when the email is staged. Never write your own signature or opt-out line, and never write copy that discourages opting out.
 - **Any opt-out wording counts.** "Stop", "remove me", "not interested, don't email again" — treat all of them as unsubscribes, immediately and permanently, even mid-conversation.
 - **Deliverability hygiene:** plain text only, at most one link per email (zero in email 1 is better), no attachments, no image pixels beyond what the platform adds, no ALL-CAPS or spam-trigger phrasing ("free money", "act now", "guarantee"). One recipient's spam report costs more than a hundred sends earn.
 - **EU/UK prospects:** B2B cold email requires a defensible legitimate-interest basis — the pitch must be genuinely relevant to the person's professional role, and the first email should make it easy to object. When relevance is a stretch, don't send.
@@ -32,7 +32,7 @@ Style rules are negotiable. These are not:
 - **"Just following up"**: Say something new or don't email.
 - **"I'd love to"**: Self-serving framing. Nobody cares what you'd love.
 - **Bullet points in cold email**: Real emails don't have formatted bullets.
-- **"In today's [anything]"**: Filler.
+- **"In today's fast-paced world" and its cousins**: Filler.
 - **"Imagine if"**: Don't tell them to imagine. Show them.
 - **"What if I told you"**: Infomercial energy.
 - **"Game-changer/revolutionary/cutting-edge"**: Meaningless hype words.
@@ -87,7 +87,7 @@ Encode these findings:
   1 is the target. 200+ word emails reply at roughly half the rate.
 - **Offer CTAs beat meeting asks.** An ask that gives them something whether
   or not they buy — a free audit, a teardown, a relevant data point — lifts
-  replies ~28% over "do you have 30 minutes?". Prefer "want the teardown?"
+  replies ~28% over "can we get on a call?". Prefer "want the teardown?"
   to "worth a call?".
 - **Easy-yes CTAs beat big asks.** "Is this on your radar at all?" outpulls
   "can you do Thursday at 2?". Lower the cost of replying.
@@ -206,7 +206,7 @@ A cold email gets a reply when it hits one of four triggers. Every email should 
 
 1. **Recognition** — you named a problem they're living with, in their own words. This is the strongest trigger. It requires real specificity: "your pricing page has four tiers but no annual option" beats "companies struggle with pricing" every time.
 2. **Curiosity gap** — you know something they'd want to know ("noticed something odd in how {{company}} shows up in search"). Only works if you actually deliver the payoff when they reply. Never manufacture a fake gap.
-3. **Easy yes** — the ask is so small that replying is cheaper than deleting ("is this on your radar at all?" beats "do you have 30 minutes Thursday?").
+3. **Easy yes** — the ask is so small that replying is cheaper than deleting ("is this on your radar at all?" beats "can we talk Thursday?").
 4. **Status/peer proof** — a named, real peer or competitor did something relevant. Must be true and public. "Two other regional distributors moved off spreadsheets last quarter" only if they did.
 
 If the draft doesn't clearly hit one of these, it will be ignored no matter how clean the copy is. Rewrite around a trigger, not around your product.
@@ -231,7 +231,7 @@ If the draft doesn't clearly hit one of these, it will be ignored no matter how 
 - `one thing`
 - `your lead flow`
 - `closing the loop`
-- `{{company}} + [your product area]`
+- `{{company}} + online booking`
 
 ### Bad subjects
 - `{{first_name}}, quick question about {{company}}'s growth`

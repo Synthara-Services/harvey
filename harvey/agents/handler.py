@@ -653,10 +653,10 @@ Write a reply that:"""
 
         offer = getattr(self.config.product, "offer", None)
         booking_url = (getattr(offer, "booking_url", "") or "").strip()
+        duration = (getattr(offer, "meeting_duration", "") or "").strip()
         if intent == "interested" and booking_url:
             # The booking link goes only to someone who showed interest,
             # never into first emails or follow-ups (see the writer).
-            duration = getattr(offer, "meeting_duration", "")
             call = f"a call of {duration}" if duration else "a short call"
             owner = (getattr(offer, "meeting_owner", "") or "").strip()
             if not owner or owner.casefold() == persona.name.strip().casefold():
@@ -695,6 +695,9 @@ Write a reply that:"""
 - Asks who the right person would be
 - Makes it easy for them to refer (one-line ask)
 - Under 50 words"""
+        if duration:
+            # Every reply, so none offers a call of another length.
+            prompt += f"\n- If it mentions a call, the call is {duration}, never another length"
 
         prompt += "\n\nWrite ONLY the email body. No subject line, no greeting label, no signature block, no markdown."
 

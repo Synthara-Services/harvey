@@ -173,6 +173,15 @@ class Writer:
                 f"({'awaiting approval' if require_approval else 'approved'})."
             )
 
+    def _call_length_rule(self) -> str:
+        """The configured call length, so no email offers a call of another
+        length. The booking link itself never reaches the writer."""
+        offer = getattr(self.config.product, "offer", None)
+        duration = (getattr(offer, "meeting_duration", "") or "").strip()
+        if not duration:
+            return ""
+        return f"\n- If you mention a call, it is a call of {duration}. Never name another length."
+
     async def _write_personal_email(self, prospect) -> dict | None:
         """One grounded draft for one person. Facts in, one email out."""
         facts = [
@@ -230,7 +239,7 @@ Requirements:
   question. No pitch, no product name.
 - Write the actual text (no merge variables — you know their name/company).
 - Subject: lowercase, 2-5 words.
-- Follow every STRICT EMAIL RULE above.
+- Follow every STRICT EMAIL RULE above.{self._call_length_rule()}
 
 Return ONLY JSON: {{"subject": "...", "body": "..."}}"""
 
@@ -294,7 +303,7 @@ Requirements:
   these prospects' industry or role (use the notes above).
 - Never be pushy or salesy. Be consultative and value-driven.
 - Subject lines: lowercase, 2-5 words.
-- Follow every rule in the STRICT EMAIL RULES above. No exceptions.
+- Follow every rule in the STRICT EMAIL RULES above. No exceptions.{self._call_length_rule()}
 
 Return ONLY a JSON array (no markdown fences, no commentary):
 [
