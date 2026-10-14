@@ -10,7 +10,7 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError, field_validator
 
-from harvey.paths import PROJECT_ROOT
+from harvey.paths import LOCAL_CONFIG, PROJECT_ROOT, SANDBOXED
 
 logger = logging.getLogger("harvey.config")
 
@@ -366,9 +366,11 @@ def _find_config_file() -> str:
     the tracked ``harvey.yaml`` stays an untrained template — nobody
     publishes their positioning, pricing, and prospect targeting by accident.
     """
+    # In a sandbox (the test suite), only the sandbox's harvey.local.yaml
+    # counts, never the one in the directory the run started from.
+    local = [LOCAL_CONFIG] if SANDBOXED else [Path.cwd() / "harvey.local.yaml", LOCAL_CONFIG]
     candidates = [
-        Path.cwd() / "harvey.local.yaml",
-        PROJECT_ROOT / "harvey.local.yaml",
+        *local,
         Path.cwd() / "harvey.yaml",
         Path.cwd().parent / "harvey.yaml",
         PROJECT_ROOT / "harvey.yaml",
