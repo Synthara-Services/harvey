@@ -205,6 +205,7 @@ These go in `harvey.yaml` under `usage:`. Use sensible defaults unless they want
 - `quiet_hours`: 22:00-07:00 in their timezone
 - `max_daily_sends`: 50 (email send limit)
 - `scout_serper_daily_searches`: 20 (Serper searches the scout may use a day before it falls back to the free search engines; 0 keeps it off Serper and leaves the credits to discovery)
+- `reoon_daily_checks`: 20 (Reoon email checks a day, for named people and businesses' own addresses alike; about twice `max_daily_sends`, since some come back invalid. When they are used, the scout verifies no new address until the next day and logs that once)
 
 ### Step 7: Start Harvey
 

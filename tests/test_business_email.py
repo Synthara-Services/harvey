@@ -324,7 +324,7 @@ def make_scout(state, fetch, verdicts=None, monkeypatch=None):
 def verified(monkeypatch):
     checked = []
 
-    async def verify(email, env=None):
+    async def verify(email, env=None, reoon_budget=None):
         checked.append(email)
         return "verified"
     monkeypatch.setattr(scout_module, "verify_address", verify)

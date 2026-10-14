@@ -26,7 +26,7 @@ import random
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import dns.resolver
@@ -506,13 +506,57 @@ def _status_from_verdict(verdict: dict) -> Optional[str]:
     return None  # unknown / inbox_full / risky-unknown — inconclusive
 
 
-async def _verify_candidate(email: str, mx_type: str, env) -> tuple[Optional[str], bool]:
+# Reoon checks made on one calendar day, in the settings table, so a
+# restart does not reset the count.
+REOON_CHECKS_KEY = "reoon_checks:{day}"
+
+
+class ReoonBudget:
+    """How many Reoon checks Harvey may still make today.
+
+    A check is counted before the call, so one that fails still uses one:
+    the budget errs towards spending less.
+    """
+
+    def __init__(self, state, daily_cap: int):
+        self.state = state
+        self.daily_cap = max(0, int(daily_cap))
+
+    def _key(self) -> str:
+        return REOON_CHECKS_KEY.format(day=date.today().isoformat())
+
+    async def used(self) -> int:
+        try:
+            return int(await self.state.get_setting(self._key(), "0") or 0)
+        except ValueError:
+            return 0
+
+    async def left(self) -> int:
+        return max(0, self.daily_cap - await self.used())
+
+    async def take(self) -> bool:
+        if await self.left() <= 0:
+            return False
+        await self.state.increment_setting(self._key())
+        return True
+
+
+async def _verify_candidate(
+    email: str, mx_type: str, env, reoon_budget: "ReoonBudget | None" = None,
+) -> tuple[Optional[str], bool]:
     """Run the best available verifier for this domain type.
 
     Returns (status_or_None, catch_all_seen). Order is chosen so scarce
     paid-ish credits are spent only where they actually resolve the domain.
+    With ``reoon_budget``, Reoon is asked only while today's checks last.
     """
     reoon_key = getattr(env, "reoon_api_key", "") if env else ""
+
+    async def reoon():
+        if reoon_budget is not None and not await reoon_budget.take():
+            return None
+        return await verify_reoon(email, reoon_key)
+
     zerobounce_key = getattr(env, "zerobounce_api_key", "") if env else ""
     hunter_key = _hunter_api_key()
 
@@ -525,7 +569,7 @@ async def _verify_candidate(email: str, mx_type: str, env) -> tuple[Optional[str
         if zerobounce_key:
             channels.append(lambda: verify_zerobounce(email, zerobounce_key))
         if reoon_key:
-            channels.append(lambda: verify_reoon(email, reoon_key))
+            channels.append(reoon)
         if hunter_key:
             channels.append(lambda: verify_hunter(email, hunter_key))
         for channel in channels:
@@ -541,7 +585,7 @@ async def _verify_candidate(email: str, mx_type: str, env) -> tuple[Optional[str
 
     # Small / self-hosted: Reoon → SMTP (still works here) → Hunter.
     if reoon_key:
-        verdict = await verify_reoon(email, reoon_key)
+        verdict = await reoon()
         if verdict:
             if verdict.get("catch_all"):
                 catch_all_seen = True
@@ -570,7 +614,8 @@ async def _verify_candidate(email: str, mx_type: str, env) -> tuple[Optional[str
     return None, catch_all_seen
 
 
-async def verify_address(email: str, env=None) -> str:
+async def verify_address(email: str, env=None,
+                         reoon_budget: "ReoonBudget | None" = None) -> str:
     """Grade an address Harvey found rather than built (a business's
     published info@ or Gmail): verified / risky / guess / invalid."""
     email = (email or "").strip().lower()
@@ -580,7 +625,7 @@ async def verify_address(email: str, env=None) -> str:
     mx_host = await get_mx_host(domain)
     if not mx_host:
         return "invalid"
-    status, _ = await _verify_candidate(email, classify_mx(mx_host), env)
+    status, _ = await _verify_candidate(email, classify_mx(mx_host), env, reoon_budget)
     logger.info(f"Business address {email}: [{status or 'guess'}]")
     return status or "guess"
 
@@ -595,6 +640,7 @@ async def find_email(
     env=None,
     state=None,
     known_emails: Optional[list[tuple[str, str, str]]] = None,
+    reoon_budget: "ReoonBudget | None" = None,
 ) -> EmailResult:
     """Find and honestly grade one email for a person at a company.
 
@@ -634,7 +680,7 @@ async def find_email(
     if not verify:
         return EmailResult(email=candidate, status="guess", pattern=pattern, mx_type=mx_type)
 
-    status, catch_all = await _verify_candidate(candidate, mx_type, env)
+    status, catch_all = await _verify_candidate(candidate, mx_type, env, reoon_budget)
 
     if catch_all and state is not None:
         try:
