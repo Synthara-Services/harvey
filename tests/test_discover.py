@@ -7,6 +7,7 @@ anyone, and that directories never make it in.
 """
 
 import asyncio
+import json
 import os
 import tempfile
 
@@ -658,3 +659,223 @@ async def test_an_unmappable_term_is_reported_not_silently_skipped(
                                                      coordinate="1,2,40")])
     assert report.found == 0
     assert report.errors and "no category" in report.errors[0]
+
+
+# ── Serper Maps (listings on the Serper key) ──
+
+# The shape of a real /maps response (2026-10-14: 3 credits, 20 places),
+# with made-up businesses.
+SERPER_MAPS_RESPONSE = {
+    "searchParameters": {"q": "restaurants Tirana", "type": "maps",
+                         "engine": "google"},
+    "ll": "@41.3234426,19.8145422,15z",
+    "places": [
+        {"position": 1, "title": "Own Site Grill", "address": "Rruga A 1, Tiranë 1001, Albania",
+         "rating": 4.8, "ratingCount": 1906, "type": "Steak house",
+         "types": ["Steak house"], "website": "https://www.ownsitegrill.al/",
+         "phoneNumber": "+355 69 000 0001", "cid": "1001", "placeId": "ChIJown"},
+        {"position": 2, "title": "No Site Taverna", "address": "Rruga B 2, Tiranë, Albania",
+         "rating": 4.9, "ratingCount": 270, "type": "Restaurant",
+         "types": ["Restaurant"], "phoneNumber": "+355 69 000 0002",
+         "cid": "1002", "placeId": "ChIJnosite"},
+        {"position": 3, "title": "Insta Bistro", "address": "Rruga C 3, Tiranë, Albania",
+         "rating": 4.7, "ratingCount": 1701, "type": "Restaurant",
+         "website": "https://www.instagram.com/instabistro/",
+         "phoneNumber": "+355 69 000 0003", "cid": "1003", "placeId": "ChIJinsta"},
+        {"position": 4, "title": "Booking Hotel One", "address": "Rruga D 4, Tiranë, Albania",
+         "rating": 4.5, "ratingCount": 88, "type": "Hotel",
+         "website": "https://www.booking.com/hotel/al/one.html",
+         "phoneNumber": "Rruga D 4, Tiranë", "cid": "1004", "placeId": "ChIJbook1"},
+        {"position": 5, "title": "", "cid": "1005"},
+    ],
+    "credits": 3,
+}
+
+
+@pytest.mark.asyncio
+async def test_serper_maps_adapter_reads_the_real_response_shape():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["key"] = request.headers.get("X-API-KEY")
+        seen["body"] = request.content
+        return httpx.Response(200, json=SERPER_MAPS_RESPONSE)
+
+    provider = D.SerperMaps()
+    async with _client(handler) as client:
+        out = await provider.fetch(client, {"serper_api_key": "k"},
+                                   D.DiscoveryQuery(term="restaurants", location="Tirana"))
+
+    assert seen["url"] == "https://google.serper.dev/maps"
+    assert seen["key"] == "k"
+    assert json.loads(seen["body"]) == {"q": "restaurants Tirana"}
+
+    assert [b.name for b in out] == ["Own Site Grill", "No Site Taverna",
+                                     "Insta Bistro", "Booking Hotel One"], \
+        "a place without a name is dropped"
+    grill = out[0]
+    assert grill.domain == "ownsitegrill.al" and grill.has_website is True
+    assert grill.category == "Steak house"
+    assert grill.phone == "+355 69 000 0001"
+    assert grill.rating == 4.8 and grill.review_count == 1906
+    assert grill.location == "Tirana", "the searched city, not the address spelling"
+    assert grill.external_id == "serper_maps:ChIJown"
+    assert grill.source_url == "https://maps.google.com/?cid=1001"
+    assert provider.last_credits == 3
+    assert provider.last_cost == pytest.approx(0.003)
+
+
+@pytest.mark.asyncio
+async def test_serper_maps_social_and_platform_pages_are_no_website():
+    provider = D.SerperMaps()
+    async with _client(lambda r: httpx.Response(200, json=SERPER_MAPS_RESPONSE)) as client:
+        out = await provider.fetch(client, {"serper_api_key": "k"},
+                                   D.DiscoveryQuery(term="restaurants", location="Tirana"))
+    by_name = {b.name: b for b in out}
+    for name in ("No Site Taverna", "Insta Bistro", "Booking Hotel One"):
+        assert by_name[name].has_website is False, name
+        assert by_name[name].domain == "" and by_name[name].website == ""
+        assert by_name[name].external_id, "kept by its place ID"
+    assert by_name["Booking Hotel One"].phone == "", "an address is not a phone"
+
+
+@pytest.mark.asyncio
+async def test_serper_maps_falls_back_to_the_measured_rate_without_a_credits_field():
+    body = dict(SERPER_MAPS_RESPONSE)
+    body.pop("credits")
+    provider = D.SerperMaps()
+    async with _client(lambda r: httpx.Response(200, json=body)) as client:
+        await provider.fetch(client, {"serper_api_key": "k"},
+                             D.DiscoveryQuery(term="restaurants", location="Tirana"))
+    assert provider.last_credits == D.SerperMaps.CREDITS_PER_SEARCH == 3
+
+
+def test_serper_maps_estimate_counts_credits():
+    queries = [D.DiscoveryQuery(term=t, location=c)
+               for t in ("restaurants", "hotels") for c in ("Tirana", "Durrës", "Vlorë")]
+    provider = D.SerperMaps()
+    assert provider.estimate_credits(queries) == 18
+    assert provider.estimate(queries) == pytest.approx(0.018)
+    assert D.Serper().estimate_credits(queries) is None
+
+
+@pytest.mark.asyncio
+async def test_serper_maps_estimate_needs_no_geocoding(state, config, monkeypatch):
+    async def no_geocoding(*a, **kw):
+        raise AssertionError("Serper Maps searches by place name")
+
+    monkeypatch.setattr(D, "resolve_coordinates", no_geocoding)
+    q = [D.DiscoveryQuery(term="restaurants", location="Tirana")]
+    report = await D.run_discovery(state, config, "serper_maps", q, dry_run=True)
+    assert report.estimated_credits == 3
+    assert report.as_dict()["estimated_credits"] == 3
+
+
+@pytest.mark.asyncio
+async def test_listings_providers_still_geocode(state, config, monkeypatch):
+    called = []
+
+    async def resolve(state, queries, *a, **kw):
+        called.append(len(queries))
+        return queries
+
+    monkeypatch.setattr(D, "resolve_coordinates", resolve)
+    q = [D.DiscoveryQuery(term="roofer", location="Denver")]
+    await D.run_discovery(state, config, "dataforseo_listings", q, dry_run=True)
+    assert called == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_run_counts_the_credits_it_used(state, config, register):
+    class CreditFake(FakeProvider):
+        def estimate_credits(self, queries):
+            return 3 * len(queries)
+
+        async def fetch(self, client, env, query):
+            self.last_credits = 3
+            return await super().fetch(client, env, query)
+
+    register(CreditFake([[biz(domain="a.com")], [biz(domain="b.com")]]))
+    q = [D.DiscoveryQuery(term="restaurants", location=c) for c in ("a", "b")]
+    report = await D.run_discovery(state, config, "fake", q)
+    assert report.estimated_credits == 6
+    assert report.credits_used == 6
+
+
+@pytest.mark.asyncio
+async def test_maps_listings_without_a_site_of_their_own_are_kept_apart(
+        state, config, register):
+    """Two hotels whose only link is booking.com are two companies, and
+    both count as having no website."""
+    provider = D.SerperMaps()
+    q = D.DiscoveryQuery(term="hotels", location="Tirana")
+    hotels = [
+        {"title": "Hotel One", "website": "https://www.booking.com/hotel/al/one.html",
+         "placeId": "ChIJ1", "cid": "1", "type": "Hotel", "rating": 4.1, "ratingCount": 10},
+        {"title": "Hotel Two", "website": "https://www.booking.com/hotel/al/two.html",
+         "placeId": "ChIJ2", "cid": "2", "type": "Hotel", "rating": 4.6, "ratingCount": 40},
+        {"title": "Hotel Three", "website": "https://www.facebook.com/hotelthree",
+         "placeId": "ChIJ3", "cid": "3", "type": "Hotel"},
+    ]
+    register(FakeProvider([[provider._to_business(h, q) for h in hotels]]))
+    report = await D.run_discovery(state, config, "fake", [q])
+    assert report.new_companies == 3 and report.junk == 0
+    assert len(await state.cohort(["NO_WEBSITE"])) == 3
+
+
+@pytest.mark.parametrize("url,own", [
+    ("https://www.ownsitegrill.al/", True),
+    ("http://salt.al/tirana/", True),
+    ("https://rito-restaurant-tirana.tablesit.co/book", True),
+    ("https://www.instagram.com/kripedhepiper/", False),
+    ("https://m.facebook.com/somepage", False),
+    ("https://fb.com/somepage", False),
+    ("https://www.booking.com/hotel/al/x.html", False),
+    ("https://www.tripadvisor.it/Restaurant_Review", False),
+    ("https://sites.google.com/view/x", False),
+    ("https://linktr.ee/x", False),
+    ("https://wa.me/355690000000", False),
+    ("", False),
+])
+def test_own_website(url, own):
+    assert bool(D.own_website(url)) is own
+
+
+@pytest.mark.parametrize("raw,kept", [
+    ("+355 69 207 7440", True),
+    ("069 207 7440", True),
+    ("(044) 123-456", True),
+    ("Rruga Brigada e VIII, Tiranë 1019", False),
+    ("12", False),
+    ("", False),
+])
+def test_phone_number(raw, kept):
+    assert bool(D.phone_number(raw)) is kept
+
+
+def test_serper_maps_is_on_the_menu():
+    menu = {m["key"]: m for m in D.provider_menu({"serper_api_key": "k"})}
+    assert menu["serper_maps"]["configured"] is True
+    assert menu["serper_maps"]["env_keys"] == ["SERPER_API_KEY"]
+    assert "3 credits" in menu["serper_maps"]["cost_note"]
+
+
+def test_the_estimate_prints_the_credit_count(capsys, monkeypatch):
+    from harvey import cli
+
+    async def no_geocoding(*a, **kw):
+        raise AssertionError("an estimate on Serper Maps makes no network call")
+
+    monkeypatch.setattr(D, "resolve_coordinates", no_geocoding)
+    args = type("A", (), dict(
+        providers=False, provider="serper_maps", estimate=True,
+        city="Tirana;Durrës", depth=30, limit=100, max_spend=1.0,
+        no_profile=False))()
+    cli.cmd_discover(args)
+    out = capsys.readouterr().out
+    n = len(D.build_queries(load_config(), cities=["Tirana", "Durrës"]))
+    assert f"{n} queries via Serper Maps" in out
+    assert f"({3 * n} credits)" in out
+    assert "no coordinates" not in out
+    assert "Estimate only" in out

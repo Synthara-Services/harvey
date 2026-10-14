@@ -174,6 +174,7 @@ harvey discover --providers                        # the menu, with real prices
 harvey discover --estimate                         # projected spend, then exits
 harvey discover                                    # free OpenStreetMap source
 harvey discover --provider dataforseo_listings --max-spend 2.00
+harvey discover --provider serper_maps --estimate --city "Tirana;Prishtinë"   # credits too
 ```
 
 The dashboard's **Discover** tab is the same thing with the tradeoffs laid out
@@ -186,6 +187,7 @@ side by side: what each source does, what it costs, its free tier, and which
 | **DataForSEO Business Listings** | $0.372/1k businesses | $1 credit | Local trades, clinics, contractors. Phone + domain + rating + whether the listing is claimed, and it can filter for businesses with **no website at all**. |
 | **DataForSEO SERP** | $0.0018 a search at depth 30 | $1 credit + free sandbox | Rank as the buying signal. Positions 11-30 are the sweet spot. |
 | **Serper** | ~$0.30-$1.00/1k | 2,500 free, no card | The easiest paid one to try. |
+| **Serper Maps** | 3 credits a search, up to 20 businesses | 2,500 free credits, no card | Google Maps listings on the Serper key: name, category, phone, rating, review count, website or none. A social profile or booking page counts as no website. `--estimate` prints the credit count. |
 
 Cities are geocoded automatically (cached forever, one lookup per city), or set
 `icp.geo_coordinates` in harvey.yaml to control the radius:

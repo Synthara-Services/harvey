@@ -234,12 +234,20 @@ class DiscoveryProvider:
     env_keys: tuple[str, ...] = ()
     caveat: str = ""
 
+    # Listings providers search a radius, so their queries are geocoded
+    # first. One that searches by place name says so here.
+    needs_coordinates: bool = True
+
     def configured(self, env: dict) -> bool:
         return all(env.get(k) for k in self.env_keys)
 
     def estimate(self, queries: list[DiscoveryQuery]) -> float:
         """Projected spend, in dollars, before anything is called."""
         return 0.0
+
+    def estimate_credits(self, queries: list[DiscoveryQuery]) -> int | None:
+        """Projected credits, for a provider that bills in credits."""
+        return None
 
     async def fetch(self, client: httpx.AsyncClient, env: dict,
                     query: DiscoveryQuery) -> list[Business]:
@@ -248,6 +256,7 @@ class DiscoveryProvider:
     # Shared helper: providers report their own per-query spend so the run log
     # records what actually happened, not what was projected.
     last_cost: float = 0.0
+    last_credits: int = 0
 
 
 class DataForSEOListings(DiscoveryProvider):
@@ -450,6 +459,108 @@ class Serper(DiscoveryProvider):
         return out
 
 
+# A listing's "website" is sometimes a page on someone else's platform. For
+# the business that means no site of its own, and as an identity it would
+# merge every hotel on booking.com into one company (or, for a social
+# profile, drop the business as junk).
+THIRD_PARTY_SITE = re.compile(
+    r"(^|\.)(facebook|fb|instagram|tiktok|linkedin|twitter|x|youtube|whatsapp|"
+    r"booking|airbnb|tripadvisor|google)\.[a-z.]+$"
+    r"|^(wa\.me|t\.me|linktr\.ee|g\.page|goo\.gl)$",
+    re.I,
+)
+
+
+def own_website(url: str) -> str:
+    """The URL when it is the business's own site, else ""."""
+    host = normalize_domain(url)
+    if not host or THIRD_PARTY_SITE.search(host):
+        return ""
+    return url.strip()
+
+
+def phone_number(raw: str) -> str:
+    """The value when it looks like a phone number, else "". Listings
+    sometimes carry the street address in the phone field."""
+    raw = (raw or "").strip()
+    digits = sum(c.isdigit() for c in raw)
+    return raw if digits >= 6 and re.fullmatch(r"\+?[\d\s().-]+", raw) else ""
+
+
+class SerperMaps(DiscoveryProvider):
+    """Google Maps listings on the Serper key: the business list itself.
+
+    One search for "<business type> <city>" returns a page of up to 20
+    businesses with category, phone, rating, review count and website, or
+    no website at all, which web results can never show. Measured on
+    2026-10-14: 3 credits a search, 20 places a page.
+    """
+
+    key = "serper_maps"
+    label = "Serper Maps (Google Maps listings)"
+    kind = "listings"
+    needs_coordinates = False        # the city is part of the search text
+    blurb = ("Search Google Maps for '<business type> <city>' and keep every "
+             "listing: name, category, phone, website or none, rating and "
+             "review count. Same key and credits as Serper.")
+    cost_note = "3 credits per search, up to 20 businesses ($0.003 at the $50 pack rate)"
+    free_tier = "2,500 free credits (about 830 searches), no card required"
+    signup_url = "https://serper.dev"
+    env_keys = ("serper_api_key",)
+    caveat = ("One page of up to 20 businesses per search. A website that is "
+              "only a social profile or a booking platform page counts as no "
+              "website.")
+
+    CREDITS_PER_SEARCH = 3
+    # The $50 pack of 50,000 credits, the dearest rate; bigger packs cost less.
+    PRICE_PER_CREDIT = 0.001
+
+    def estimate_credits(self, queries):
+        return self.CREDITS_PER_SEARCH * len(queries)
+
+    def estimate(self, queries):
+        return self.estimate_credits(queries) * self.PRICE_PER_CREDIT
+
+    async def fetch(self, client, env, query):
+        r = await client.post(
+            "https://google.serper.dev/maps",
+            headers={"X-API-KEY": env["serper_api_key"],
+                     "Content-Type": "application/json"},
+            json={"q": query.keyword()},
+        )
+        r.raise_for_status()
+        data = r.json()
+        # Serper reports what each call cost; the measured rate otherwise.
+        credits = data.get("credits")
+        self.last_credits = (int(credits) if isinstance(credits, (int, float))
+                             else self.CREDITS_PER_SEARCH)
+        self.last_cost = self.last_credits * self.PRICE_PER_CREDIT
+        places = [p for p in data.get("places") or [] if p.get("title")]
+        return [self._to_business(p, query) for p in places[:query.limit]]
+
+    def _to_business(self, place: dict, query: DiscoveryQuery) -> Business:
+        site = own_website(place.get("website") or "")
+        cid = str(place.get("cid") or "")
+        place_id = place.get("placeId") or cid
+        return Business(
+            name=place["title"],
+            domain=normalize_domain(site),
+            website=site,
+            phone=phone_number(place.get("phoneNumber") or ""),
+            address=place.get("address") or "",
+            # The city searched for: the call list is sorted by it, and an
+            # address's own spelling varies ("Tiranë", "Tirana").
+            location=query.location,
+            category=place.get("type") or "",
+            rating=place.get("rating"),
+            review_count=place.get("ratingCount"),
+            has_website=bool(site),
+            external_id=f"{self.key}:{place_id}" if place_id else "",
+            source_url=f"https://maps.google.com/?cid={cid}" if cid else "",
+            provider=self.key,
+        )
+
+
 class OpenStreetMap(DiscoveryProvider):
     """Genuinely free, no account, no key. Honest about what that costs you.
 
@@ -594,6 +705,7 @@ PROVIDERS: dict[str, DiscoveryProvider] = {
         DataForSEOListings(),
         DataForSEOSerp(),
         Serper(),
+        SerperMaps(),
     )
 }
 
@@ -635,6 +747,8 @@ class DiscoveryReport:
     queries: int = 0
     estimated_cost: float = 0.0
     actual_cost: float = 0.0
+    estimated_credits: int | None = None   # providers that bill in credits
+    credits_used: int = 0
     found: int = 0
     junk: int = 0
     new_companies: int = 0
@@ -649,6 +763,8 @@ class DiscoveryReport:
             "provider": self.provider, "queries": self.queries,
             "estimated_cost": round(self.estimated_cost, 4),
             "actual_cost": round(self.actual_cost, 4),
+            "estimated_credits": self.estimated_credits,
+            "credits_used": self.credits_used,
             "found": self.found, "junk": self.junk,
             "new_companies": self.new_companies,
             "known_companies": self.known_companies,
@@ -707,10 +823,11 @@ async def run_discovery(
         raise ValueError(f"unknown discovery provider: {provider_key!r}")
 
     queries = queries or build_queries(config)
-    if provider.kind == "listings":
+    if provider.kind == "listings" and provider.needs_coordinates:
         queries = await resolve_coordinates(state, queries)
     report = DiscoveryReport(provider=provider_key, queries=len(queries))
     report.estimated_cost = provider.estimate(queries)
+    report.estimated_credits = provider.estimate_credits(queries)
 
     if dry_run:
         return report
@@ -761,8 +878,10 @@ async def run_discovery(
 
                 try:
                     provider.last_cost = 0.0
+                    provider.last_credits = 0
                     found = await provider.fetch(client, env, query)
                     report.actual_cost += provider.last_cost
+                    report.credits_used += provider.last_credits
                 except Exception as e:
                     # A failure is an observation about the run, not a reason
                     # to lose the queries that already succeeded.
