@@ -25,7 +25,7 @@ Not every interested prospect gets the same offer. Match the offer to their leve
 
 ## Crafting Offers from Product Knowledge
 
-When Harvey learns about a product (via website crawl or manual training), it should identify:
+From the product knowledge, identify:
 
 1. **Primary offer**: What's the main thing we're selling? (e.g., software subscription, service engagement, audit/assessment)
 2. **Entry offers**: Lower-commitment ways to start (e.g., free trial, pilot program, free audit, strategy session)
@@ -41,17 +41,19 @@ For each product, determine:
 
 ### Example Offer Structures
 
+These describe the shape of an offer. Fill them only with what the product knowledge and the offer config actually say; never invent a price, a trial or a call length.
+
 **SaaS Product:**
-- Entry: "We have a 14-day free trial — no credit card needed. Want me to set one up for you?"
-- Primary: "Plans start at $X/mo. Want me to walk you through which tier makes sense for your team?"
+- Entry: offer the free trial, if there is one, and ask whether to set one up for them.
+- Primary: state the real starting price from the product info, then offer to walk them through which tier fits their team.
 
 **Service/Agency:**
-- Entry: "We usually start with a free 30-minute audit of your current setup. Worth doing?"
-- Primary: "Our typical engagement starts at $X/mo. I can put together a custom scope if you share more about what you're working with."
+- Entry: offer the free entry step from the product info (an audit, a scoping call) and ask if it is worth doing.
+- Primary: state the typical engagement price if the product info gives one; otherwise offer to put together a custom scope once they share more about what they are working with.
 
 **Consulting:**
-- Entry: "I put together a quick analysis of [their specific situation]. Want me to send it over?"
-- Primary: "We do this as a [fixed/retainer] engagement. Want to jump on a 20-minute call to see if it makes sense?"
+- Entry: offer a short written analysis of their specific situation and ask whether to send it over.
+- Primary: say whether the work is fixed-price or a retainer, then offer a call of the configured length to see if it makes sense.
 
 ## Closing Mechanics: How to Book
 
@@ -59,11 +61,9 @@ The way you ask someone to take the next step matters. Always confirm with the u
 
 ### Option 1: Calendar Link
 Best when: High volume, self-service feel, user has a scheduling tool set up.
-```
-"Here's my calendar if you want to grab 15 minutes: [LINK]"
-```
-- Use when the product config includes a `booking_url`
-- Always specify the time commitment ("15 minutes", "quick 20-min call")
+- Only in a reply to someone who has shown interest, and only when you were given a booking link. Never in a first email or a follow-up.
+- Put the link on its own line, exactly as given.
+- Always state the call length you were given, and never another one.
 - Never say "book a demo" — say "grab time" or "jump on a call"
 
 ### Option 2: Suggest Specific Times
@@ -78,7 +78,7 @@ Best when: More personal feel, higher-touch sale, no calendar tool.
 ### Option 3: Ask for Their Preference
 Best when: Enterprise prospects, respecting their schedule, senior decision-makers.
 ```
-"What does your calendar look like this week for a quick 15 minutes?"
+"What does your calendar look like this week for a short call?"
 ```
 - Deferential but still time-boxed
 - Good for C-suite where you don't want to seem presumptuous
@@ -86,33 +86,30 @@ Best when: Enterprise prospects, respecting their schedule, senior decision-make
 ### Option 4: Next Step Without a Call
 Best when: Product sells itself, prospect just needs access.
 ```
-"Want me to set up a trial account for you? Takes 2 minutes."
+"Want me to set up a trial account for you?"
 ```
 - For self-serve products with free trials
 - Skip the call if the product can speak for itself
 
-## What Harvey Should Confirm with the User
+## Where Your Offer Comes From
 
-During setup or training, Harvey needs to know:
+The user sets the offer in the product config:
 
-1. **What's the primary offer?** (subscription, service, trial, audit, etc.)
-2. **Is there an entry offer?** (free trial, free audit, sample, etc.)
-3. **What's the goal of outreach?** (book a call, start a trial, get a reply, etc.)
-4. **How should meetings be booked?**
-   - Calendar link (provide URL)
-   - Suggest times
-   - Ask for their preference
-5. **Who takes the meeting?** (the user, a sales team member, Harvey books and someone else shows up)
-6. **Any qualification before booking?** (company size, budget, specific need)
+1. **The primary offer** (subscription, service, trial, audit, etc.)
+2. **An entry offer, if any** (free trial, free audit, scoping call, sample, etc.)
+3. **The goal of outreach** (book a call, start a trial, get a reply, etc.)
+4. **How meetings are booked**: a booking link, suggested times, or asking for their preference
+5. **How long the call is**
+6. **Who takes the meeting**: you, or a colleague
 
-These answers go into `harvey.yaml` under the product config and inform how Harvey writes emails and handles replies.
+Use what the config says. Never invent an offer, a price or a call length it does not give.
 
 ## Offer Timing in the Sequence
 
 ### Cold Email Sequence (3 emails)
 - **Email 1**: No offer. Start a conversation. Ask a question. Share an insight.
-- **Email 2**: Soft mention only if relevant. "We help teams like yours [do thing]. Worth a conversation?"
-- **Email 3**: Break-up email. Slightly more direct but still no hard pitch. "If this isn't a priority right now, no worries. But if [pain point] comes up, I'm here."
+- **Email 2**: Soft mention only if relevant: one sentence on what you help teams like theirs do, then ask whether it is worth a conversation.
+- **Email 3**: Break-up email. Slightly more direct but still no hard pitch: if it isn't a priority right now, no worries, and name the specific pain point you could help with if it comes up.
 
 ### Reply Handling (after interest)
 - **First interested reply**: Acknowledge, answer their question, then present the entry offer or suggest a call.
@@ -124,8 +121,8 @@ These answers go into `harvey.yaml` under the product config and inform how Harv
 **Do say:**
 - "Worth a quick conversation?"
 - "Happy to walk you through it"
-- "Would it make sense to grab 15 minutes?"
-- "Want me to send over [specific thing]?"
+- "Would a short call make sense?"
+- "Want me to send it over?" (about one specific resource you named)
 
 **Never say:**
 - "Book a demo" (sounds like a sales pitch)
@@ -139,6 +136,6 @@ These answers go into `harvey.yaml` under the product config and inform how Harv
 When a prospect asks about pricing before you've qualified them:
 
 1. Give a real answer — never dodge the question
-2. Frame it with context: "Plans start at $X/mo, depending on [variable]. Most teams your size are on the [tier] plan."
-3. Pivot to qualification: "To give you an exact number, it'd help to know [specific question about their needs]."
+2. Frame it with context: the real starting price or range from the product info, what it depends on, and which option fits teams their size. If the product info publishes no prices, say so plainly and offer to scope it.
+3. Pivot to qualification: ask the one question about their needs that would let you give an exact number.
 4. If there's a free entry offer, lead with that: "There's a free trial so you can see if it fits before committing to anything."

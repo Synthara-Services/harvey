@@ -16,7 +16,7 @@ from harvey.models.prospect import Prospect
 BOOKING_URL = "https://calendar.example.com/book/abc123"
 
 
-def make_cfg(booking_url=BOOKING_URL, meeting_owner="Jane Roe"):
+def make_cfg(booking_url=BOOKING_URL, meeting_owner="Jane Roe", meeting_duration="30 minutes"):
     class Cfg:
         class persona:
             name = "Jane Roe"; email = "jane@example.com"; company = "Example Co"
@@ -27,7 +27,7 @@ def make_cfg(booking_url=BOOKING_URL, meeting_owner="Jane Roe"):
             objection_responses = {}
             offer = SimpleNamespace(
                 booking_method="calendar_link", booking_url=booking_url,
-                meeting_duration="30 minutes", meeting_owner=meeting_owner,
+                meeting_duration=meeting_duration, meeting_owner=meeting_owner,
             )
 
         class channels:
@@ -144,7 +144,7 @@ async def test_other_replies_never_carry_the_link(intent):
 async def test_without_a_link_the_interested_reply_suggests_a_next_step():
     prompt = await reply_prompt("interested", booking_url="")
     assert "Suggests a specific next step" in prompt
-    assert "booking link" not in prompt
+    assert "Puts this booking link" not in prompt
 
 
 @pytest.mark.asyncio
