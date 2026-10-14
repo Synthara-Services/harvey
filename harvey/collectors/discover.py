@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from harvey.hosts import THIRD_PARTY_SITE, is_third_party_host  # noqa: F401
 from harvey.models import Company
 
 logger = logging.getLogger("harvey.collectors.discover")
@@ -459,22 +460,15 @@ class Serper(DiscoveryProvider):
         return out
 
 
-# A listing's "website" is sometimes a page on someone else's platform. For
+# A listing's "website" is sometimes a page on someone else's platform: a
+# social profile, a booking page, a link-in-bio page or a free builder. For
 # the business that means no site of its own, and as an identity it would
 # merge every hotel on booking.com into one company (or, for a social
-# profile, drop the business as junk).
-THIRD_PARTY_SITE = re.compile(
-    r"(^|\.)(facebook|fb|instagram|tiktok|linkedin|twitter|x|youtube|whatsapp|"
-    r"booking|airbnb|tripadvisor|google)\.[a-z.]+$"
-    r"|^(wa\.me|t\.me|linktr\.ee|g\.page|goo\.gl)$",
-    re.I,
-)
-
-
+# profile, drop the business as junk). The list lives in harvey.hosts.
 def own_website(url: str) -> str:
     """The URL when it is the business's own site, else ""."""
     host = normalize_domain(url)
-    if not host or THIRD_PARTY_SITE.search(host):
+    if not host or is_third_party_host(host):
         return ""
     return url.strip()
 

@@ -24,6 +24,7 @@ import logging
 import os
 import random
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -84,7 +85,11 @@ def _clean_domain(domain: str) -> str:
 
 
 def _clean_name_part(value: str) -> str:
-    return re.sub(r"[^a-z]", "", (value or "").lower())
+    """Letters only, folded to ASCII: Gëzim → gezim, Çela → cela, Miljević →
+    miljevic. Stripping instead of folding would build gzim@ for Gëzim."""
+    decomposed = unicodedata.normalize("NFKD", (value or "").lower())
+    folded = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return re.sub(r"[^a-z]", "", folded)
 
 
 def build_email(pattern: str, first: str, last: str, domain: str) -> str:
@@ -354,8 +359,11 @@ async def derive_pattern(
 async def verify_reoon(email: str, api_key: str) -> Optional[dict]:
     """Reoon email-verifier — generous free tier, good catch-all flagging.
 
-    Returns {'status': ..., 'catch_all': bool} or None if unavailable.
-    Reoon 'status' values: valid / invalid / disabled / catch_all / unknown.
+    Returns {'status', 'catch_all', 'deliverable', 'safe_to_send'} or None
+    if unavailable. Power mode's statuses (Reoon API docs): safe / invalid /
+    disabled / disposable / inbox_full / catch_all / role_account /
+    spamtrap / unknown. There is no "valid" in power mode: a good address
+    is "safe", and a good info@ is "role_account" with is_deliverable true.
     """
     try:
         async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
@@ -376,7 +384,12 @@ async def verify_reoon(email: str, api_key: str) -> Optional[dict]:
         return None
     status = str(data.get("status") or "").lower()
     is_catch_all = bool(data.get("is_catch_all") or status == "catch_all")
-    return {"status": status, "catch_all": is_catch_all}
+    return {
+        "status": status,
+        "catch_all": is_catch_all,
+        "deliverable": data.get("is_deliverable"),
+        "safe_to_send": data.get("is_safe_to_send"),
+    }
 
 
 async def verify_zerobounce(email: str, api_key: str) -> Optional[dict]:
@@ -476,13 +489,21 @@ def _status_from_verdict(verdict: dict) -> Optional[str]:
     if verdict.get("catch_all"):
         return "risky"
     status = verdict.get("status", "")
-    if status in ("valid", "deliverable"):
+    if status in ("valid", "deliverable", "safe"):
         return "verified"
-    if status in ("invalid", "undeliverable", "disabled"):
+    if status == "role_account":
+        # A role mailbox (info@, office@) is judged on deliverability like
+        # any other address: being a role address alone is not a risk.
+        if verdict.get("deliverable") is True or verdict.get("safe_to_send") is True:
+            return "verified"
+        if verdict.get("deliverable") is False:
+            return "invalid"
+        return None
+    if status in ("invalid", "undeliverable", "disabled", "disposable", "spamtrap"):
         return "invalid"
     if status in ("catch_all", "catch-all", "accept_all"):
         return "risky"
-    return None  # unknown / risky-unknown — inconclusive
+    return None  # unknown / inbox_full / risky-unknown — inconclusive
 
 
 async def _verify_candidate(email: str, mx_type: str, env) -> tuple[Optional[str], bool]:
@@ -547,6 +568,21 @@ async def _verify_candidate(email: str, mx_type: str, env) -> tuple[Optional[str
                 return status, catch_all_seen
 
     return None, catch_all_seen
+
+
+async def verify_address(email: str, env=None) -> str:
+    """Grade an address Harvey found rather than built (a business's
+    published info@ or Gmail): verified / risky / guess / invalid."""
+    email = (email or "").strip().lower()
+    domain = email.rpartition("@")[2]
+    if not domain:
+        return "invalid"
+    mx_host = await get_mx_host(domain)
+    if not mx_host:
+        return "invalid"
+    status, _ = await _verify_candidate(email, classify_mx(mx_host), env)
+    logger.info(f"Business address {email}: [{status or 'guess'}]")
+    return status or "guess"
 
 
 # ── Top-level entry point ──

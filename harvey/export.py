@@ -31,16 +31,25 @@ async def collect_prospects(
     min_score: int = 0,
     statuses: list[str] | None = None,
     include_all: bool = False,
+    business_only: bool = False,
 ) -> list[dict]:
     """Fetch prospects matching the filters as export-ready dicts.
 
     Default view is the *deliverable* list (verified + risky emails).
     ``include_all`` disables every filter for a full dump.
+    ``business_only`` lists businesses' own addresses (info@, a Gmail on
+    their site) whatever their email status, unless one is asked for.
     """
     import aiosqlite
+    from harvey.models.prospect import BUSINESS_EMAIL_SOURCE
 
     where = []
     params: list = []
+    if business_only:
+        where.append("source = ?")
+        params.append(BUSINESS_EMAIL_SOURCE)
+        if email_statuses is None:
+            email_statuses = []
     if not include_all:
         wanted = email_statuses if email_statuses is not None else DEFAULT_EMAIL_STATUSES
         if wanted:
@@ -103,6 +112,7 @@ async def export_prospects_csv(
     min_score: int = 0,
     statuses: list[str] | None = None,
     include_all: bool = False,
+    business_only: bool = False,
 ) -> tuple[int, str]:
     """Export prospects to CSV. Returns (row_count, csv_text).
 
@@ -114,6 +124,7 @@ async def export_prospects_csv(
         min_score=min_score,
         statuses=statuses,
         include_all=include_all,
+        business_only=business_only,
     )
     text = to_csv(rows)
     if out_path:

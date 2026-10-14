@@ -5,6 +5,12 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field, field_validator
 
 
+# `source` of a prospect that is a business's own public address (info@,
+# kontakt@, a Gmail on its site) rather than a named person. It has no name,
+# and every email to it greets the business.
+BUSINESS_EMAIL_SOURCE = "business_email"
+
+
 def _utcnow() -> datetime:
     """Naive UTC now (consistent with DB storage; avoids deprecated utcnow)."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -51,9 +57,16 @@ class Prospect(BaseModel):
     def _strip_linkedin(cls, v: str) -> str:
         return (v or "").strip()
 
+    @property
+    def is_business_address(self) -> bool:
+        return self.source == BUSINESS_EMAIL_SOURCE
+
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
 
     def is_valid(self) -> bool:
-        """A contact must have at minimum a name and title."""
+        """A person needs a name and title; a business address needs the
+        address and the business it belongs to."""
+        if self.is_business_address:
+            return bool(self.email and self.company)
         return bool(self.first_name and self.last_name and self.title)

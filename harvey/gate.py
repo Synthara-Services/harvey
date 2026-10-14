@@ -41,6 +41,13 @@ MERGE_TAG_RE = re.compile(
 # footnote such as "[1]" is not one.
 BRACKET_PLACEHOLDER_RE = re.compile(r"\[\s*[^\W\d_][^\[\]\n]{0,40}\]")
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+# A greeting whose name rendered empty: "Hi ," or "Përshëndetje ,". A
+# greeting with no name at all ("Hello," "Përshëndetje,") is fine: that is
+# how an email to a business's own inbox opens.
+EMPTY_NAME_GREETING_RE = re.compile(
+    r"(?im)^\s*(hi|hey|hello|dear|p[eë]rsh[eë]ndetje|i nderuar|e nderuar|"
+    r"t[eë] nderuar)\s+[,!:]"
+)
 
 DELIVERABLE_STATUSES = {"verified", "risky"}
 
@@ -101,6 +108,8 @@ def pre_send_check(
         leftover += BRACKET_PLACEHOLDER_RE.findall(subject)
     if leftover:
         reasons.append(f"unfilled placeholders: {sorted(set(leftover))[:3]}")
+    if EMPTY_NAME_GREETING_RE.search(body):
+        reasons.append("greeting with an empty name")
 
     # Banned phrases (spam triggers + AI tells)
     lowered = (subject + " " + body).lower()

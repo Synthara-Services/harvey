@@ -37,11 +37,14 @@ from bs4 import BeautifulSoup
 
 from harvey.brain import Brain
 from harvey.config import HarveyConfig, EnvConfig
-from harvey.integrations.email_finder import find_email
+from harvey.business_email import pick_business_email
+from harvey.hosts import is_third_party_host
+from harvey.integrations.email_finder import find_email, verify_address
 from harvey.integrations.linkedin import LinkedInAutomation
 from harvey.language import country_from_evidence, fold
 from harvey.models.company import Company
-from harvey.models.prospect import Prospect
+from harvey.models.prospect import BUSINESS_EMAIL_SOURCE, Prospect
+from harvey.site_links import candidate_pages
 from harvey.state import StateManager
 
 logger = logging.getLogger("harvey.scout")
@@ -89,6 +92,13 @@ def looks_like_person_name(first: str, last: str) -> bool:
     return True
 
 
+def _who(prospect: Prospect) -> str:
+    """"Jane Doe (Owner)", or the address for a business's own inbox."""
+    if prospect.is_business_address:
+        return f"the business address {prospect.email}"
+    return f"{prospect.full_name()} ({prospect.title})"
+
+
 # Settings key counting the scout's Serper searches on one day.
 SERPER_SEARCHES_KEY = "scout_serper_searches:{day}"
 # Delay between search requests (seconds)
@@ -100,6 +110,16 @@ SCRAPE_TIMEOUT = 12.0
 MAX_RETRIES = 3
 BACKOFF_BASE = 1.5  # seconds; grows exponentially per attempt
 MAX_RESULTS_PER_QUERY = 20
+# Pages read on a company's own site after its homepage: the homepage's
+# links to team, about and contact pages (English or Albanian), then these
+# paths. Nine, as when only the fixed English paths were tried.
+SITE_PAGE_BUDGET = 9
+TEAM_PAGE_PATHS = ("/team", "/about", "/about-us", "/our-team", "/rreth-nesh",
+                   "/ekipi", "/kontakt", "/contact", "/people", "/leadership",
+                   "/staff")
+# A team member's name: letters in any alphabet (Gëzim Çela), dots,
+# apostrophes, hyphens and spaces.
+TEAM_NAME_RE = re.compile(r"^[^\W\d_](?:[^\W\d_]|[.'’\- ])+$")
 # Serper returns at most 10 organic results a search on any account, and
 # a free account refuses a request for more when the query has quotes
 # (measured 2026-10-14). 10 is one credit.
@@ -632,7 +652,7 @@ class Scout:
                 self._remember_prospect(prospect)
                 count += 1
                 logger.info(
-                    f"Scout: Added {prospect.full_name()} ({prospect.title}) "
+                    f"Scout: Added {_who(prospect)} "
                     f"at {prospect.company} [hunter]"
                 )
                 if count >= MAX_PROSPECTS_PER_CYCLE:
@@ -695,7 +715,7 @@ class Scout:
                 await self._add_prospect(prospect)
                 count += 1
                 logger.info(
-                    f"Scout: Added {prospect.full_name()} ({prospect.title}) "
+                    f"Scout: Added {_who(prospect)} "
                     f"at {prospect.company} [backfill]"
                 )
                 if count >= MAX_PROSPECTS_PER_CYCLE:
@@ -943,7 +963,7 @@ class Scout:
             await self._add_prospect(prospect)
             count += 1
             logger.info(
-                f"Scout: Added {prospect.full_name()} ({prospect.title}) "
+                f"Scout: Added {_who(prospect)} "
                 f"at {prospect.company} [score: {prospect.score}]"
             )
             if count >= MAX_PROSPECTS_PER_CYCLE:
@@ -1191,7 +1211,7 @@ class Scout:
         contact_summaries = []
         for i, c in enumerate(contacts):
             contact_summaries.append(
-                f"{i+1}. {c.full_name()} — {c.title} at {c.company} "
+                f"{i+1}. {_who(c)} at {c.company} "
                 f"({c.industry}). Email: {c.email or 'none'}. "
                 f"Seniority: {c.seniority or 'unknown'}."
             )
@@ -1411,19 +1431,42 @@ Respond ONLY with the JSON array."""
 
     async def _scrape_team_page(self, domain: str) -> list[dict]:
         """Try to find and scrape a company's team/about page."""
-        team_paths = ["/team", "/about", "/about-us", "/our-team", "/people",
-                      "/leadership", "/about/team", "/company/team", "/staff"]
-        members = []
+        members, _ = await self._crawl_site(domain)
+        return members
 
-        base, _ = await self._resolve_base_url(domain)
-        if not base:
-            return members
+    async def _crawl_site(self, domain: str) -> tuple[list[dict], list[str]]:
+        """Team members on a company's own site, and the pages read.
 
-        for path in team_paths:
-            url = f"{base}{path}"
+        The homepage (already fetched to find a working address) is read
+        for its links to team, about and contact pages, in English or
+        Albanian and under a language prefix such as /sq/. Those come first,
+        then fixed paths, at most SITE_PAGE_BUDGET pages after the homepage.
+        Stops at the first page with team members. The pages are kept so a
+        business with no named person can still be reached at its own
+        address. A platform's domain (beacons.ai, wixsite.com) is never
+        read: nothing on it is about the business.
+        """
+        members: list[dict] = []
+        pages: list[str] = []
+        if is_third_party_host(domain):
+            return members, pages
+
+        base, home = await self._resolve_base_url(domain)
+        if not base or home is None:
+            return members, pages
+        home_html = home.text or ""
+        pages.append(home_html)
+        home_soup = self._safe_soup(home_html)
+        if home_soup is not None:
+            await self._learn_pattern_from_page(home_soup, home_html, domain)
+
+        home_url = str(getattr(home, "url", "") or base)
+        for url in candidate_pages(base, home_url, home_html, TEAM_PAGE_PATHS,
+                                   ("team", "about", "contact"), SITE_PAGE_BUDGET):
             resp = await self._fetch(url, timeout=SCRAPE_TIMEOUT, retries=1)
             if resp is None:
                 continue
+            pages.append(resp.text or "")
 
             soup = self._safe_soup(resp.text)
             if soup is None:
@@ -1433,46 +1476,7 @@ Respond ONLY with the JSON array."""
             # reveals the domain's whole pattern (learned once, reused free).
             await self._learn_pattern_from_page(soup, resp.text, domain)
 
-            try:
-                cards = soup.select(
-                    ".team-member, .person, .staff, [class*='team'], "
-                    "[class*='leadership'], [class*='member'], [class*='person']"
-                )
-            except Exception:
-                cards = []
-
-            for card in cards:
-                name_el = card.select_one("h2, h3, h4, .name, [class*='name']")
-                title_el = card.select_one(
-                    "p, .title, .role, .position, "
-                    "[class*='title'], [class*='role'], [class*='position']"
-                )
-                if not name_el:
-                    continue
-
-                name = re.sub(r"\s+", " ", name_el.get_text()).strip()
-                title = ""
-                if title_el:
-                    title = re.sub(r"\s+", " ", title_el.get_text()).strip()
-
-                # Reject obvious non-names (too long/short, digits, symbols).
-                if not (3 <= len(name) <= 50):
-                    continue
-                if any(ch.isdigit() for ch in name):
-                    continue
-                if not re.match(r"^[A-Za-z][A-Za-z.'\- ]+$", name):
-                    continue
-
-                parts = name.split(" ", 1)
-                if len(parts) < 2 or not parts[1].strip():
-                    continue
-
-                members.append({
-                    "first_name": parts[0].strip(),
-                    "last_name": parts[1].strip(),
-                    "title": title[:120],
-                })
-
+            members.extend(self._team_members_from(soup))
             if members:
                 break
 
@@ -1485,7 +1489,51 @@ Respond ONLY with the JSON array."""
                 continue
             seen.add(key)
             unique.append(m)
-        return unique
+        return unique, pages
+
+    def _team_members_from(self, soup) -> list[dict]:
+        """Name and title from each team card on a page."""
+        members = []
+        try:
+            cards = soup.select(
+                ".team-member, .person, .staff, [class*='team'], "
+                "[class*='leadership'], [class*='member'], [class*='person']"
+            )
+        except Exception:
+            cards = []
+
+        for card in cards:
+            name_el = card.select_one("h2, h3, h4, .name, [class*='name']")
+            title_el = card.select_one(
+                "p, .title, .role, .position, "
+                "[class*='title'], [class*='role'], [class*='position']"
+            )
+            if not name_el:
+                continue
+
+            name = re.sub(r"\s+", " ", name_el.get_text()).strip()
+            title = ""
+            if title_el:
+                title = re.sub(r"\s+", " ", title_el.get_text()).strip()
+
+            # Reject obvious non-names (too long/short, digits, symbols).
+            if not (3 <= len(name) <= 50):
+                continue
+            if any(ch.isdigit() for ch in name):
+                continue
+            if not TEAM_NAME_RE.match(name):
+                continue
+
+            parts = name.split(" ", 1)
+            if len(parts) < 2 or not parts[1].strip():
+                continue
+
+            members.append({
+                "first_name": parts[0].strip(),
+                "last_name": parts[1].strip(),
+                "title": title[:120],
+            })
+        return members
 
     async def _contacts_from_company(
         self,
@@ -1496,9 +1544,16 @@ Respond ONLY with the JSON array."""
         signal_note: str = "",
         source: str = "company_website",
     ) -> list[Prospect]:
-        """Team-page scrape → ICP-matched, email-resolved, deduped prospects."""
+        """Team-page scrape → ICP-matched, email-resolved, deduped prospects.
+
+        When the site names nobody who matches, the business's own public
+        address (info@, kontakt@, a Gmail on its site) becomes the one
+        prospect for the company.
+        """
+        if is_third_party_host(domain):
+            return []
         try:
-            team_members = await self._scrape_team_page(domain)
+            team_members, pages = await self._crawl_site(domain)
         except Exception as e:
             logger.debug(f"Team scrape failed for {domain}: {e}")
             return []
@@ -1541,7 +1596,51 @@ Respond ONLY with the JSON array."""
 
             self._remember_prospect(prospect)
             contacts.append(prospect)
+
+        if not contacts:
+            business = await self._business_contact(
+                company_id, domain, company_name, industry, pages, signal_note)
+            if business:
+                contacts.append(business)
         return contacts
+
+    async def _business_contact(
+        self,
+        company_id: str,
+        domain: str,
+        company_name: str,
+        industry: str,
+        pages: list[str],
+        signal_note: str = "",
+    ) -> Prospect | None:
+        """The business's own public address as its one prospect, or None.
+
+        No name is invented: the prospect is the business. The address is
+        verified like any other, and kept even when it fails, so the company
+        is not crawled again for nothing.
+        """
+        email = pick_business_email(pages, domain)
+        if not email:
+            return None
+        prospect = Prospect(
+            email=email,
+            company=company_name,
+            company_id=company_id,
+            industry=industry,
+            source=BUSINESS_EMAIL_SOURCE,
+            source_url=f"https://{domain}",
+            personalization_notes=signal_note,
+        )
+        if not prospect.is_valid() or await self._is_duplicate_prospect(prospect):
+            return None
+        try:
+            prospect.email_status = await verify_address(email, env=self.env)
+        except Exception as e:
+            logger.debug(f"verify_address failed for {email}: {e}")
+            prospect.email_status = "guess"
+        prospect.email_verified = prospect.email_status == "verified"
+        self._remember_prospect(prospect)
+        return prospect
 
     # ── Strategy 4: Job boards — companies hiring for signal roles ──
 
@@ -1667,7 +1766,7 @@ Respond ONLY with the JSON array."""
             await self._add_prospect(prospect)
             count += 1
             logger.info(
-                f"Scout: Added {prospect.full_name()} ({prospect.title}) "
+                f"Scout: Added {_who(prospect)} "
                 f"at {prospect.company} via job-board signal [score: {prospect.score}]"
             )
             if count >= MAX_PROSPECTS_PER_CYCLE:
@@ -1788,6 +1887,8 @@ Respond ONLY with the JSON array."""
         person-name pattern.
         """
         domain = domain.lower()
+        if is_third_party_host(domain):
+            return
         role_locals = {
             "info", "sales", "support", "hello", "contact", "admin",
             "team", "help", "office", "press", "media", "careers", "jobs",
@@ -1943,7 +2044,7 @@ Respond ONLY with the JSON array."""
         # just as often with a phrase ("As Founder of ...").
         if snippet:
             name_match = re.match(
-                r"^\s*([^\W\d_][^\W\d_'\-]+)\s+([^\W\d_][^\W\d_'\-]+)",
+                r"^\s*([^\W\d_](?:[^\W\d_]|['\-])+)\s+([^\W\d_](?:[^\W\d_]|['\-])+)",
                 snippet.strip(),
             )
             if name_match:

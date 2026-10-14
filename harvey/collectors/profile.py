@@ -18,6 +18,9 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from harvey.hosts import is_third_party_host
+from harvey.site_links import candidate_pages
+
 logger = logging.getLogger("harvey.collectors.profile")
 
 TIMEOUT = httpx.Timeout(connect=8.0, read=12.0, write=8.0, pool=8.0)
@@ -99,12 +102,18 @@ BOOKING_HINTS = (r"calendly\.com", r"acuityscheduling", r"schedulicity",
 AI_CRAWLERS = ("gptbot", "google-extended", "ccbot", "anthropic-ai", "claudebot",
                "perplexitybot", "bytespider")
 
-TEAM_PATHS = ("/team", "/about", "/about-us", "/our-team", "/staff",
-              "/leadership", "/meet-the-team", "/company/team")
+# The homepage's own links to these pages come first (in English or
+# Albanian, see harvey/site_links.py), then these paths, under the site's
+# language prefix (/sq/) when it has one. The page budgets are what the
+# English paths alone used to take.
+TEAM_PATHS = ("/team", "/about", "/about-us", "/our-team", "/rreth-nesh",
+              "/ekipi", "/staff", "/leadership", "/meet-the-team", "/company/team")
+TEAM_PAGE_BUDGET = 8
 CAREERS_PATHS = ("/careers", "/jobs", "/join-us", "/employment", "/hiring",
                  "/about/careers", "/careers/")
-CONTACT_PATHS = ("/contact", "/contact-us", "/get-a-quote", "/free-estimate",
-                 "/request-estimate", "/quote")
+CONTACT_PATHS = ("/contact", "/contact-us", "/kontakt", "/na-kontaktoni",
+                 "/get-a-quote", "/free-estimate", "/request-estimate", "/quote")
+CONTACT_PAGE_BUDGET = 6
 
 # Words that are never part of a person's name. Without this, headings like
 # "Request Service", "Baker History" and "Commercial Services" pass a
@@ -177,6 +186,7 @@ class ProfileCollector:
         self.confirmed = confirmed if confirmed is not None else set()
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        self._final_urls: dict[str, str] = {}
 
     def wants(self, code: str) -> bool:
         return code in self.confirmed
@@ -204,10 +214,15 @@ class ProfileCollector:
         ctype = resp.headers.get("content-type", "")
         if "html" not in ctype and "xml" not in ctype and "text" not in ctype:
             return ""
+        # Where a redirect landed (https://site.al/sq/): its language
+        # prefix is where the site's other pages live.
+        self.__dict__.setdefault("_final_urls", {})[url] = str(
+            getattr(resp, "url", "") or url)
         return resp.text
 
-    async def _resolve_site(self, domain: str) -> tuple[str, str]:
-        """Return (working base url, homepage html), or ("", "") if none work.
+    async def _resolve_site(self, domain: str) -> tuple[str, str, str]:
+        """Return (working base url, homepage html, homepage url after
+        redirects, e.g. https://site.al/sq/), or ("", "", "") if none work.
 
         Tries https/http and bare/www variants — a plain https guess marks
         plenty of live, real small-business sites "unreachable" simply
@@ -219,13 +234,25 @@ class ProfileCollector:
         ):
             html = await self._get(base)
             if html:
-                return base, html
-        return "", ""
+                return base, html, getattr(self, "_final_urls", {}).get(base, base)
+        return "", "", ""
 
-    async def _first_present(self, site: str, paths) -> tuple[str, str]:
-        """Return (url, html) for the first path that returns content."""
-        for path in paths:
-            url = f"{site}{path}"
+    async def _first_present(self, site: str, paths, home_url: str = "",
+                             home_html: str = "", kinds: tuple[str, ...] = (),
+                             budget: int | None = None) -> tuple[str, str]:
+        """Return (url, html) for the first page that returns content.
+
+        With ``kinds``, the homepage's own links of those kinds come first,
+        then ``paths`` (under the language prefix too), at most ``budget``
+        pages in all.
+        """
+        budget = budget if budget is not None else len(paths)
+        if kinds:
+            urls = candidate_pages(site, home_url or site, home_html, paths,
+                                   kinds, budget)
+        else:
+            urls = [f"{site}{path}" for path in paths][:budget]
+        for url in urls:
             html = await self._get(url)
             if html and len(html) > 500:
                 return url, html
@@ -285,8 +312,10 @@ class ProfileCollector:
         people, seen = [], set()
         # Name in a heading, title in the nearby text.
         for m in re.finditer(
-            r"(?is)<(h[1-5]|strong|b)[^>]*>\s*([A-Z][a-z'\-]+(?:\s+[A-Z]\.?)?\s+"
-            r"[A-Z][a-zA-Z'\-]+)\s*</\1>(?=(.{0,220}))", text_html
+            # Letters in any alphabet: Gëzim Çela is a name.
+            r"(?is)<(h[1-5]|strong|b)[^>]*>\s*([^\W\d_](?:[^\W\d_]|['\-])+"
+            r"(?:\s+[^\W\d_]\.?)?\s+[^\W\d_](?:[^\W\d_]|['\-])+)\s*</\1>"
+            r"(?=(.{0,220}))", text_html
         ):
             # NOTE the lookahead above: capturing the trailing context normally
             # would CONSUME it, so finditer would skip every person whose entry
@@ -354,7 +383,13 @@ class ProfileCollector:
                 "evidence_url": url or site,
             })
 
-        site, home = await self._resolve_site(domain)
+        if is_third_party_host(domain):
+            # A platform's own site (beacons.ai, wixsite.com) says nothing
+            # about the business, and its people are not the business's.
+            logger.info(f"profile: {domain} is a platform, not the business's site")
+            return obs
+
+        site, home, home_url = await self._resolve_site(domain)
         if not home:
             # A failure IS an observation — silent failures look like clean results.
             logger.info(f"profile: {domain} unreachable")
@@ -417,7 +452,9 @@ class ProfileCollector:
             if re.search(r"(?is)<form\b", _strip_code(home)):
                 add("CONTACT_FORM_URL", text=site, url=site)
             else:
-                curl, chtml = await self._first_present(site, CONTACT_PATHS)
+                curl, chtml = await self._first_present(
+                    site, CONTACT_PATHS, home_url, home, ("contact",),
+                    CONTACT_PAGE_BUDGET)
                 if chtml and re.search(r"(?is)<form\b", _strip_code(chtml)):
                     add("CONTACT_FORM_URL", text=curl, url=curl)
 
@@ -442,7 +479,9 @@ class ProfileCollector:
 
         # team page → people
         if self.wants("CONTACT_FOUND") or self.wants("DECISION_MAKER_TITLE"):
-            turl, thtml = await self._first_present(site, TEAM_PATHS)
+            turl, thtml = await self._first_present(
+                site, TEAM_PATHS, home_url, home, ("team", "about"),
+                TEAM_PAGE_BUDGET)
             if thtml:
                 for person in self.detect_people(thtml):
                     label = f"{person['first_name']} {person['last_name']}"
