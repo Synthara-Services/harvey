@@ -19,10 +19,9 @@ from harvey.state import StateManager
 
 logger = logging.getLogger("harvey.brain")
 
-from harvey.paths import PROJECT_ROOT
+from harvey.paths import PROJECT_ROOT, SKILLS_DIR
 
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
-SKILLS_DIR = PROJECT_ROOT / "skills"
 
 # Subprocess safety limits
 DEFAULT_TIMEOUT_SECONDS = 300  # a single Claude call should never hang forever

@@ -24,7 +24,7 @@ from harvey.state import StateManager
 
 logger = logging.getLogger("harvey.trainer")
 
-from harvey.paths import PROJECT_ROOT
+from harvey.paths import PROJECT_ROOT, SKILLS_DIR, USER_ROOT
 
 # Settings training does not learn, used only on a first run with no config
 # at all. They mirror the shipped harvey.yaml.
@@ -409,7 +409,7 @@ class Trainer:
         self.state = StateManager()
         self.brain = Brain(self.state, self.brain_config)
         self.scraped_pages: dict[str, str] = {}
-        self.skills_dir = PROJECT_ROOT / "skills"
+        self.skills_dir = SKILLS_DIR
         # What this run wrote, and what it proposed next to existing files.
         self.written: list[Path] = []
         self.proposed: list[tuple[Path, Path]] = []
@@ -457,11 +457,11 @@ class Trainer:
             return None
         base_url = f"{parsed.scheme}://{domain}"
 
-        # Relative paths resolve against the project root, so training works
-        # no matter what directory it's launched from.
+        # Relative paths resolve next to harvey.local.yaml (the project root
+        # unless sandboxed), so training works from any directory.
         config_path = Path(output_path)
         if not config_path.is_absolute():
-            config_path = PROJECT_ROOT / config_path
+            config_path = USER_ROOT / config_path
         # Read the settings to keep before spending any crawl or model calls.
         try:
             settings = _settings_in_effect(config_path)

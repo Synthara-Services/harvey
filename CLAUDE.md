@@ -274,6 +274,9 @@ harvey discover              # Find businesses; --providers / --estimate / --pro
 harvey sending pause|resume  # Kill switch for all outbound
 ```
 
+### Tests never touch the user's files
+`tests/conftest.py` points `data/`, `skills/` and `harvey.local.yaml` at a temporary folder (`HARVEY_SANDBOX`, read by `harvey/paths.py`) before anything imports harvey, and fails the run if any real file there changed, keeping a copy from before the run to restore from. Old code does not know the sandbox: run a mutation check against an older version in a separate checkout (`git worktree add`), never in the user's folder.
+
 ### Common Issues
 - **"command not found: harvey"**: Activate venv first: `source .venv/bin/activate`
 - **"ModuleNotFoundError: No module named 'harvey'" after install (macOS)**: Python 3.13 silently ignores `.pth` files that carry the macOS hidden file flag, and some Macs propagate that flag into `.venv`. Run `harvey install` again (it auto-fixes by linking the package), or manually: `ln -s "$(pwd)/harvey" .venv/lib/python3.13/site-packages/harvey`
