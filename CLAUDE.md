@@ -202,6 +202,7 @@ These go in `harvey.yaml` under `usage:`. Use sensible defaults unless they want
 - `heartbeat_interval_minutes`: 15 (how often Harvey checks for work)
 - `quiet_hours`: 22:00-07:00 in their timezone
 - `max_daily_sends`: 50 (email send limit)
+- `scout_serper_daily_searches`: 20 (Serper searches the scout may use a day before it falls back to the free search engines; 0 keeps it off Serper and leaves the credits to discovery)
 
 ### Step 7: Start Harvey
 

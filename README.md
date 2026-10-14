@@ -394,11 +394,14 @@ icp:          { industries, titles, company_size, geography, hiring_signals, geo
 channels:
   email:      { provider: gmail | smtp | instantly, max_daily_sends, require_approval,
                 send_to_risky, max_bounce_rate }
-usage:        { max_daily_claude_percent, heartbeat_interval_minutes, quiet_hours }
+usage:        { max_daily_claude_percent, heartbeat_interval_minutes, quiet_hours,
+                scout_serper_daily_searches }
 brain:        { provider: claude | codex, model, reasoning_effort }   # optional; claude by default
 ```
 
 `max_daily_claude_percent` caps whichever subscription `brain.provider` uses (the name predates Codex support).
+
+`scout_serper_daily_searches` (default 20) is how many Serper searches the scout may use in a day. After that it searches with DuckDuckGo, Bing and Google, so most Serper credits stay with discovery. `0` keeps the scout off Serper entirely.
 
 If `harvey.local.yaml` exists it wins. It's gitignored, so a fork can carry real product configuration while the tracked `harvey.yaml` stays a template — nobody publishes their positioning and pricing by accident.
 

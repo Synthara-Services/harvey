@@ -29,7 +29,7 @@ import json
 import logging
 import random
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import parse_qs, quote_plus, urlparse
 
 import httpx
@@ -48,6 +48,8 @@ logger = logging.getLogger("harvey.scout")
 
 # Max queries per cycle to avoid rate limits
 MAX_QUERIES_PER_CYCLE = 3
+# Settings key counting the scout's Serper searches on one day.
+SERPER_SEARCHES_KEY = "scout_serper_searches:{day}"
 # Delay between search requests (seconds)
 SEARCH_DELAY = (2, 5)
 
@@ -305,6 +307,7 @@ class Scout:
 
         Returns list of (url, snippet) tuples.
         Tries backends in order: Serper API → DuckDuckGo → Bing → Google.
+        Serper only while today's ``usage.scout_serper_daily_searches`` lasts.
         """
         if self._queries_this_cycle >= MAX_QUERIES_PER_CYCLE:
             logger.info("Scout: Query limit reached for this cycle. Will continue next cycle.")
@@ -318,7 +321,7 @@ class Scout:
 
         serper_key = getattr(self.env, "serper_api_key", "") or ""
         backends = []
-        if serper_key:
+        if serper_key and await self._take_serper_search():
             backends.append(lambda: self._search_serper(query, serper_key))
         backends.extend([
             lambda: self._search_duckduckgo(query),
@@ -352,6 +355,27 @@ class Scout:
             seen.add(norm)
             out.append((url, snippet))
         return out
+
+    async def _take_serper_search(self) -> bool:
+        """Spend one of today's Serper searches, or report that none are left.
+
+        Counted before the call, so a failed call still uses one: the budget
+        errs towards spending less.
+        """
+        budget = self.config.usage.scout_serper_daily_searches
+        if budget <= 0:
+            return False
+        key = SERPER_SEARCHES_KEY.format(day=date.today().isoformat())
+        try:
+            used = int(await self.state.get_setting(key, "0") or 0)
+        except ValueError:
+            used = 0
+        if used >= budget:
+            logger.debug(f"Scout: today's {budget} Serper searches are used; "
+                         "searching with the free engines.")
+            return False
+        await self.state.increment_setting(key)
+        return True
 
     async def _search_serper(self, query: str, api_key: str) -> list[tuple[str, str]]:
         """Search via Serper.dev API — most reliable, $5/mo for 2.5k searches."""
