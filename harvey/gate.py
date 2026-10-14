@@ -31,7 +31,15 @@ MAX_BODY_WORDS = 220        # hard ceiling; sequences aim far lower
 MAX_LINKS = 1
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
-MERGE_TAG_RE = re.compile(r"\{\{\s*\w+\s*\}\}|\{\s*\w+\s*\}(?!\})")
+# Template variables a render left behind: {{first_name}}, {{ First Name }},
+# {company}, {First Name}.
+MERGE_TAG_RE = re.compile(
+    r"\{\{\s*[^\W\d_][^{}\n]{0,40}\}\}|\{\s*[^\W\d_][^{}\n]{0,40}\}"
+)
+# Square-bracket placeholders a model copied from an example: [LINK],
+# [Name], [Company], [your calendar link]. They open with a letter, so a
+# footnote such as "[1]" is not one.
+BRACKET_PLACEHOLDER_RE = re.compile(r"\[\s*[^\W\d_][^\[\]\n]{0,40}\]")
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 DELIVERABLE_STATUSES = {"verified", "risky"}
@@ -84,10 +92,15 @@ def pre_send_check(
     if word_count > MAX_BODY_WORDS:
         reasons.append(f"body too long ({word_count} words > {MAX_BODY_WORDS})")
 
-    # Unrendered merge tags — the classic mass-mail embarrassment
+    # Unfilled placeholders, the classic mass-mail embarrassment. A reply's
+    # subject is "Re: " plus the prospect's own subject, which mail systems
+    # often tag ("[EXTERNAL]"), so brackets there are theirs, not ours.
     leftover = MERGE_TAG_RE.findall(subject + " " + body)
+    leftover += BRACKET_PLACEHOLDER_RE.findall(body)
+    if kind != "reply":
+        leftover += BRACKET_PLACEHOLDER_RE.findall(subject)
     if leftover:
-        reasons.append(f"unrendered merge tags: {sorted(set(leftover))[:3]}")
+        reasons.append(f"unfilled placeholders: {sorted(set(leftover))[:3]}")
 
     # Banned phrases (spam triggers + AI tells)
     lowered = (subject + " " + body).lower()

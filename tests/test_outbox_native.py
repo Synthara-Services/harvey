@@ -148,7 +148,7 @@ def test_gate_blocks_bad_content():
 
     bad = pre_send_check("jane@acme.com", "hello", "Hi {{first_name}}, act now!", p)
     assert not bad.ok
-    assert any("merge" in r for r in bad.reasons)
+    assert any("placeholder" in r for r in bad.reasons)
     assert any("banned" in r for r in bad.reasons)
 
     guess = Prospect(first_name="J", last_name="D", title="VP",
