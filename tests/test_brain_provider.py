@@ -381,14 +381,14 @@ def test_trainer_uses_and_writes_back_the_selection(tmp_path, monkeypatch):
                         lambda: BrainConfig(provider="codex", model="gpt-5.5"))
     trainer = trainer_mod.Trainer()
     assert trainer.brain.provider == "codex" and trainer.brain.model == "gpt-5.5"
-    built = trainer._build_config({"product_name": "W"}, {}, {}, "acme.com")
+    built = trainer._build_config({"product_name": "W"}, {}, {})
     assert built["brain"] == {"provider": "codex", "model": "gpt-5.5"}
     # The written config loads back with the same selection.
     assert HarveyConfig(**built).brain == BrainConfig(provider="codex", model="gpt-5.5")
 
     explicit = trainer_mod.Trainer(brain_config=BrainConfig())
     assert explicit.brain.provider == "claude"
-    assert explicit._build_config({}, {}, {}, "acme.com")["brain"] == {"provider": "claude"}
+    assert explicit._build_config({}, {}, {})["brain"] == {"provider": "claude"}
 
 
 def test_cli_train_flags_select_the_provider(monkeypatch):

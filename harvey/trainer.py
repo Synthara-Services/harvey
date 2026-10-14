@@ -5,6 +5,7 @@ Falls back to manual scraping if no Cloudflare credentials are configured.
 """
 
 import asyncio
+import copy
 import logging
 import os
 import time
@@ -17,12 +18,71 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 from harvey.brain import Brain
-from harvey.config import BrainConfig, load_brain_config
+from harvey.config import BrainConfig, ConfigError, _find_config_file, load_brain_config
 from harvey.state import StateManager
 
 logger = logging.getLogger("harvey.trainer")
 
 from harvey.paths import PROJECT_ROOT
+
+# Settings training does not learn, used only on a first run with no config
+# at all. They mirror the shipped harvey.yaml.
+DEFAULT_CHANNELS = {
+    "email": {
+        "enabled": True,
+        "provider": "gmail",
+        "max_daily_sends": 50,
+        "require_approval": True,
+        "send_to_risky": False,
+        "max_bounce_rate": 0.05,
+        "signature": "",
+        "opt_out_line": "",
+    },
+    "linkedin": {
+        "enabled": True,
+        "max_daily_connections": 20,
+        "max_daily_messages": 10,
+    },
+}
+DEFAULT_USAGE = {
+    "max_daily_claude_percent": 80,
+    "heartbeat_interval_minutes": 15,
+    "quiet_hours": {"start": "22:00", "end": "07:00", "timezone": "America/New_York"},
+}
+# Persona values in the shipped harvey.yaml. Training fills company and
+# tone from the site only while they still hold these; the sender's name,
+# role, email and LinkedIn always come from the config.
+TEMPLATE_PERSONA = {
+    "name": "Harvey",
+    "company": "Your Company",
+    "email": "harvey@yourcompany.com",
+    "tone": "professional, consultative, confident",
+}
+
+
+def _settings_in_effect(config_path: Path) -> dict:
+    """The raw settings a training run keeps.
+
+    The file being written when it exists (a re-train), else the config
+    Harvey loads today, else nothing (a first run gets the defaults above).
+    Raises ConfigError for a file that exists but can't be read, so training
+    never overwrites a config it could not understand.
+    """
+    path = config_path
+    if not path.exists():
+        try:
+            path = Path(_find_config_file())
+        except ConfigError:
+            return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as e:
+        raise ConfigError(f"Could not read {path}: {e}") from e
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path} must contain a YAML mapping.")
+    return data
 
 
 def _normalize_start_url(url: str) -> str:
@@ -354,6 +414,19 @@ class Trainer:
             return None
         base_url = f"{parsed.scheme}://{domain}"
 
+        # Relative paths resolve against the project root, so training works
+        # no matter what directory it's launched from.
+        config_path = Path(output_path)
+        if not config_path.is_absolute():
+            config_path = PROJECT_ROOT / config_path
+        # Read the settings to keep before spending any crawl or model calls.
+        try:
+            settings = _settings_in_effect(config_path)
+        except ConfigError as e:
+            print(f"\nERROR: {e}")
+            print("Fix or move that file, then train again. Nothing was changed.")
+            return None
+
         logger.info(f"Training Harvey on {base_url}...")
         print(f"\n{'='*60}")
         print(f"  Harvey Training Mode")
@@ -407,13 +480,8 @@ class Trainer:
 
         # Step 6: Generate config + skills
         print("[6/6] Building configuration and product knowledge...")
-        config = self._build_config(product_info, icp_info, objections, domain)
+        config = self._build_config(product_info, icp_info, objections, settings)
 
-        # Write config (relative paths resolve against the project root,
-        # so training works no matter what directory it's launched from)
-        config_path = Path(output_path)
-        if not config_path.is_absolute():
-            config_path = PROJECT_ROOT / config_path
         with open(config_path, "w") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
@@ -437,8 +505,15 @@ class Trainer:
         print(f"    - skills/product_knowledge.md")
         if competitive_intel.get("competitors"):
             print(f"    - skills/competitive_intel.md")
-        print(f"\n  Review {config_path} and adjust as needed — especially the")
-        print(f"  persona name/email, which I guessed from your domain.")
+        persona = config["persona"]
+        print(f"\n  Sender kept as configured: {persona['name'] or '(no name)'}"
+              f" <{persona['email'] or 'no email'}>, provider "
+              f"{config['channels'].get('email', {}).get('provider', '?')}.")
+        if persona["name"] in ("", TEMPLATE_PERSONA["name"]) or persona["email"] in (
+            "", TEMPLATE_PERSONA["email"]
+        ):
+            print(f"  Set persona name and email in {config_path} before sending.")
+        print(f"\n  Review {config_path} and adjust as needed.")
         print(f"  Then run: harvey run\n")
 
         return config
@@ -724,60 +799,58 @@ What prospects do instead of buying a solution like ours:
         product_info: dict,
         icp_info: dict,
         objections: dict,
-        domain: str,
+        settings: dict | None = None,
     ) -> dict:
-        """Build the complete harvey.yaml config."""
-        company = product_info.get("company_name", "Your Company")
-        product = product_info.get("product_name", "Your Product")
-        tone = product_info.get("tone", "professional, consultative, confident")
-        # "www.acme.com" should yield harvey@acme.com, not harvey@www.acme.com
-        email_domain = domain.removeprefix("www.")
+        """The config to write: what training learned, on top of ``settings``.
 
-        return {
-            "persona": {
-                "name": "Harvey",
-                "company": company,
-                "role": "Business Development",
-                "email": f"harvey@{email_domain}",
-                "linkedin": f"linkedin.com/in/harvey-{email_domain.replace('.', '-')}",
-                "tone": tone,
-            },
-            "product": {
-                "name": product,
-                "description": product_info.get("product_description", ""),
-                "pricing": product_info.get("pricing", "Contact for pricing"),
-                "key_benefits": product_info.get("key_benefits", []),
-                "objection_responses": objections,
-            },
-            "icp": {
-                "industries": icp_info.get("industries", ["Technology"]),
-                "company_size": icp_info.get("company_size", "10-200 employees"),
-                "titles": icp_info.get("titles", ["VP", "Director"]),
-                "geography": icp_info.get("geography", ["United States"]),
-            },
-            "channels": {
-                "email": {
-                    "enabled": True,
-                    "provider": "instantly",
-                    "max_daily_sends": 50,
-                },
-                "linkedin": {
-                    "enabled": True,
-                    "max_daily_connections": 20,
-                    "max_daily_messages": 10,
-                },
-            },
-            "usage": {
-                "max_daily_claude_percent": 80,
-                "heartbeat_interval_minutes": 15,
-                "quiet_hours": {
-                    "start": "22:00",
-                    "end": "07:00",
-                    "timezone": "America/New_York",
-                },
-            },
+        Training learns the product, the ICP and the objections. The sender
+        (persona), channels and usage stay as the user configured them, so
+        a re-train never changes who emails go out from or how.
+        """
+        settings = copy.deepcopy(settings or {})
+
+        persona = {
+            "name": "", "company": "", "role": "", "email": "", "linkedin": "",
+            "tone": TEMPLATE_PERSONA["tone"],
+        }
+        persona.update(settings.get("persona") or {})
+        learned = {
+            "company": product_info.get("company_name", ""),
+            "tone": product_info.get("tone", ""),
+        }
+        for key, value in learned.items():
+            if value and persona.get(key) in ("", None, TEMPLATE_PERSONA[key]):
+                persona[key] = value
+
+        product = settings.get("product") or {}
+        product.update({
+            "name": product_info.get("product_name", "Your Product"),
+            "description": product_info.get("product_description", ""),
+            "pricing": product_info.get("pricing", "Contact for pricing"),
+            "key_benefits": product_info.get("key_benefits", []),
+            "objection_responses": objections,
+        })
+
+        icp = settings.get("icp") or {}
+        icp.update({
+            "industries": icp_info.get("industries", ["Technology"]),
+            "company_size": icp_info.get("company_size", "10-200 employees"),
+            "titles": icp_info.get("titles", ["VP", "Director"]),
+            "geography": icp_info.get("geography", ["United States"]),
+        })
+
+        config = {
+            "persona": persona,
+            "product": product,
+            "icp": icp,
+            "channels": settings.get("channels") or copy.deepcopy(DEFAULT_CHANNELS),
+            "usage": settings.get("usage") or copy.deepcopy(DEFAULT_USAGE),
             "brain": brain_section(self.brain_config),
         }
+        # Anything else the user configured stays as it was.
+        for key, value in settings.items():
+            config.setdefault(key, value)
+        return config
 
 
 async def run_training(url: str, output: str = "harvey.local.yaml", max_pages: int = 100):
