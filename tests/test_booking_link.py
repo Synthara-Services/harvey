@@ -1,8 +1,7 @@
-"""The booking link reaches replies to interested prospects, and only those.
-
-Links in cold email from a new domain hurt deliverability, so the
-configured booking_url must never reach the writer's first email or
-follow-ups. It goes into the handler's reply when someone shows interest.
+"""Where the booking link goes: into every first email and follow-up,
+filled in by the writer, and among replies only into a reply to someone
+who showed interest. The model writing a cold email sees a placeholder,
+never the link itself, so the link reaches the email exactly as configured.
 """
 
 from types import SimpleNamespace
@@ -129,7 +128,8 @@ def test_a_reply_with_the_link_and_signature_passes_the_pre_send_gate():
         "Jane Roe\nFounder, Example Co\nexample.com\n1 Example Street, Tirana, Albania",
     )
     result = pre_send_check(
-        "ana@example.org", "Re: booking flow", body, prospect(), kind="reply"
+        "ana@example.org", "Re: booking flow", body, prospect(), kind="reply",
+        booking_url=BOOKING_URL,
     )
     assert result.ok, result.reasons
 

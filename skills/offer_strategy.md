@@ -61,7 +61,7 @@ The way you ask someone to take the next step matters. Always confirm with the u
 
 ### Option 1: Calendar Link
 Best when: High volume, self-service feel, user has a scheduling tool set up.
-- Only in a reply to someone who has shown interest, and only when you were given a booking link. Never in a first email or a follow-up.
+- Only when you were given a booking link. In first emails and follow-ups it ends the closing invitation, as your writing instructions say. In a reply, only to someone who has shown interest.
 - Put the link on its own line, exactly as given.
 - Always state the call length you were given, and never another one.
 - Never say "book a demo" — say "grab time" or "jump on a call"

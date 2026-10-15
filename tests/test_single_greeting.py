@@ -11,7 +11,7 @@ from harvey.agents.writer import Writer
 from harvey.gate import pre_send_check
 from harvey.greeting import with_greeting
 from harvey.models.prospect import BUSINESS_EMAIL_SOURCE, Prospect
-from tests.test_booking_link import RecordingBrain, make_cfg
+from tests.test_booking_link import BOOKING_URL, RecordingBrain, make_cfg
 from tests.test_outbox_native import (  # noqa: F401  (state is a fixture)
     FakeProvider,
     _now_iso,
@@ -81,7 +81,8 @@ async def test_each_step_renders_the_greeting_once(country, greeting):
         body = sender._render(step.body, business(country))
         assert body.count(greeting) == 1
         assert top_lines(body, 1) == [greeting]
-        result = pre_send_check("info@novapharm.org", step.subject, body, business(country))
+        result = pre_send_check("info@novapharm.org", step.subject, body, business(country),
+                                booking_url=BOOKING_URL)
         assert result.ok, result.reasons
 
 

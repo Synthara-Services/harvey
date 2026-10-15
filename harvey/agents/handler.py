@@ -661,8 +661,8 @@ Write a reply that:"""
         booking_url = (getattr(offer, "booking_url", "") or "").strip()
         duration = (getattr(offer, "meeting_duration", "") or "").strip()
         if intent == "interested" and booking_url:
-            # The booking link goes only to someone who showed interest,
-            # never into first emails or follow-ups (see the writer).
+            # In a reply, the booking link goes only to someone who showed
+            # interest. First emails and follow-ups get it from the writer.
             call = f"a call of {duration}" if duration else "a short call"
             owner = (getattr(offer, "meeting_owner", "") or "").strip()
             if not owner or owner.casefold() == persona.name.strip().casefold():

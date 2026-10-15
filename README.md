@@ -299,7 +299,7 @@ Harvey feels like one agent. Underneath it's five, each loaded with different sk
 | Agent | What it does |
 |---|---|
 | **Scout** | Scores and personalizes what the collectors found. Python does the searching and the email resolution; the selected model is used only where judgment is actually needed — which is what keeps the token cost sane. |
-| **Writer** | Generates 3-email sequences. Email 1 under 75 words, email 2 under 75, email 3 under 40. Hard ban list on AI-sounding language. |
+| **Writer** | Generates 3-email sequences. Email 1 (under 110 words) observes, suggests and invites: reply, book the call, or visit the website. Email 2 (under 75) and email 3 (under 40) end with the same reply-or-book invitation. The configured booking link is the only link. Hard ban list on AI-sounding language. |
 | **Sender** | Renders merge variables per prospect and stages each email into the outbox with a send time. Drains due and approved items with human-like pacing, enforcing the daily cap and stop-on-reply. |
 | **Handler** | Polls for replies, dedups them, classifies intent, advances the conversation stage, and queues responses through the same approval ladder. Detects bounces, marks the address invalid, cancels that prospect's queued sends, and trips a global kill switch past a bounce-rate threshold. |
 | **Analyst** | Runs on idle cycles. Pipeline stats, campaign performance, intent distribution, what's actually working. |
@@ -320,7 +320,7 @@ harvey outbox --approve-all
 harvey sending pause          # kill switch, stops everything mid-flight
 ```
 
-Before anything leaves, a **deterministic pre-send gate** — no model involved — rejects: unrendered merge tags, banned phrases, emails over the length cap, too many links, HTML bodies, non-deliverable addresses, and any mismatch between the recipient and the database record.
+Before anything leaves, a **deterministic pre-send gate** — no model involved — rejects: unrendered merge tags, banned phrases, emails over the length cap, more than one link or any link other than the configured booking link, HTML bodies, non-deliverable addresses, and any mismatch between the recipient and the database record.
 
 When you trust it, set `channels.email.require_approval: false` for full autopilot.
 
