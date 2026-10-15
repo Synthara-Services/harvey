@@ -231,6 +231,9 @@ class Writer:
      manual work), saying that {self.config.persona.company} builds exactly
      this for businesses like theirs. Name one of our products only when
      the product knowledge says it is live and it matches the suggestion.
+     When none matches, name none: the suggestion and that
+     {self.config.persona.company} builds exactly this stand on their own.
+     Past projects are examples, never a limit on who we work with.
   3. {invitation[0].upper()}{invitation[1:]}
   No number you were not given, no competitor names, no other link."""
 
