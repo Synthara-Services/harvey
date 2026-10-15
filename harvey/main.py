@@ -38,6 +38,13 @@ CYCLE_TIMEOUT_SECONDS = 600
 # quiet hours actually ended.
 QUIET_HOURS_POLL_SECONDS = 300
 
+# How often the heartbeat looks for model calls still running past their
+# timeout, and how far past it a call must be before it warns. The brain cuts
+# a call off at its timeout itself; this catches one that outlives even that,
+# so a stuck call never stalls Harvey without a log line (#47).
+BRAIN_WATCHDOG_SECONDS = 30
+BRAIN_WATCHDOG_GRACE_SECONDS = 15
+
 # Phase-1 tasks that read replies; sending waits for all of them to succeed.
 REPLY_READERS = ("handle_replies", "read_replies")
 
@@ -148,6 +155,26 @@ async def _run_agents(tasks: list) -> dict:
     return outcomes
 
 
+def warn_about_overdue_calls(brain: Brain) -> None:
+    for call in brain.overdue_calls(grace=BRAIN_WATCHDOG_GRACE_SECONDS):
+        logger.warning(
+            f"{brain.provider_label} call ({call.label}) has run {call.elapsed():.0f}s, "
+            f"past its {call.timeout:.0f}s timeout{call.sleep_note()}. "
+            "Harvey is still waiting on it."
+        )
+
+
+async def watch_brain_calls(brain: Brain) -> None:
+    """Runs beside the heartbeat until cancelled. Uses its own sleep, not
+    _interruptible_sleep, which paces the cycles."""
+    while True:
+        await asyncio.sleep(BRAIN_WATCHDOG_SECONDS)
+        try:
+            warn_about_overdue_calls(brain)
+        except Exception as e:
+            logger.warning(f"Could not check for overdue model calls: {e}")
+
+
 async def _interruptible_sleep(seconds: float, stop_event: asyncio.Event) -> bool:
     """Sleep up to `seconds`, waking immediately on shutdown.
 
@@ -204,6 +231,7 @@ async def heartbeat(stop_event: asyncio.Event | None = None):
     interval = config.usage.heartbeat_interval_minutes * 60
     max_calls = max(int(200 * (config.usage.max_daily_claude_percent / 100)), 1)
     consecutive_errors = 0
+    watchdog = asyncio.create_task(watch_brain_calls(brain))
 
     while not stop_event.is_set():
         try:
@@ -354,6 +382,8 @@ async def heartbeat(stop_event: asyncio.Event | None = None):
             if await _interruptible_sleep(backoff, stop_event):
                 break
 
+    watchdog.cancel()
+    await asyncio.gather(watchdog, return_exceptions=True)
     logger.info("Harvey shutting down. Deals don't close themselves, but I need a break.")
 
 
