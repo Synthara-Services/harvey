@@ -11,6 +11,7 @@ design). Every draft still passes the deterministic pre-send gate.
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from harvey.brain import Brain
@@ -20,6 +21,7 @@ from harvey.integrations.mail_provider import (
     outreach_footer,
     with_footer,
 )
+from harvey.gate import configured_booking_url, link_problems
 from harvey.greeting import business_greeting, with_greeting
 from harvey.language import LANGUAGE_NAMES, language_for_country
 from harvey.models.campaign import Campaign, EmailStep
@@ -31,6 +33,11 @@ logger = logging.getLogger("harvey.writer")
 # small — the rest of the 'new' pool is picked up on later cycles.
 NATIVE_BATCH_CAP = 8
 LEGACY_BATCH_CAP = 50
+
+# The model writes this where the booking link goes and never sees the link
+# itself, so the link reaches the email exactly as configured.
+BOOKING_PLACEHOLDER = "{{booking_url}}"
+BOOKING_PLACEHOLDER_RE = re.compile(r"\{\{\s*booking_url\s*\}\}")
 
 
 class Writer:
@@ -190,6 +197,57 @@ class Writer:
             return ""
         return f"\n- If you mention a call, it is a call of {duration}. Never name another length."
 
+    def _invitation_rule(self, website: bool) -> str:
+        """How every email ends: one invitation naming the ways in. Email 1
+        also names the website; follow-ups offer a reply or the call."""
+        booking = configured_booking_url(self.config)
+        ways = ["reply to this email"]
+        if booking:
+            offer = getattr(self.config.product, "offer", None)
+            duration = (getattr(offer, "meeting_duration", "") or "").strip()
+            call = f"the free scoping call of {duration}" if duration else "the free scoping call"
+            ways.append(f"book {call} at the booking link")
+        if website:
+            ways.append("visit our website, written as plain text exactly as the "
+                        "product knowledge gives it (no http, no www)")
+        if len(ways) == 1:
+            rule = f"one invitation to {ways[0]}."
+        else:
+            named = ", ".join(ways[:-1]) + ", or " + ways[-1]
+            rule = f"one invitation naming every way in: {named}."
+        if booking:
+            return (f"{rule} Put {BOOKING_PLACEHOLDER} on its own line right after "
+                    "it, exactly as written: it becomes the booking link.")
+        return f"{rule} No booking link is configured: write no link."
+
+    def _first_email_rules(self, observation: str) -> str:
+        """Every first email observes, suggests and invites, in that order."""
+        invitation = self._invitation_rule(website=True)
+        return f"""Under 110 words before the signature, in three parts, in this order:
+  1. {observation}
+  2. One sentence with a concrete suggestion tied to that observation (for
+     example a website with direct booking and online payment, an online
+     shop that takes orders on WhatsApp, a mobile app, or an automation of
+     manual work), saying that {self.config.persona.company} builds exactly
+     this for businesses like theirs. Name one of our products only when
+     the product knowledge says it is live and it matches the suggestion.
+  3. {invitation[0].upper()}{invitation[1:]}
+  No number you were not given, no competitor names, no other link."""
+
+    def _with_booking_link(self, body: str) -> str:
+        """Put the configured booking link where the model wrote its
+        placeholder. One link at most: an earlier placeholder is dropped,
+        and a draft that forgot it gets the link as its last line. Without
+        a configured link, any placeholder is dropped."""
+        url = configured_booking_url(self.config)
+        parts = BOOKING_PLACEHOLDER_RE.split(body)
+        if not url:
+            return _tidy("".join(parts)) if len(parts) > 1 else body
+        if len(parts) == 1:
+            return body.rstrip() + "\n" + url
+        filled = "".join(parts[:-1]) + url + parts[-1]
+        return _tidy(filled) if len(parts) > 2 else filled
+
     async def _write_personal_email(self, prospect) -> dict | None:
         """One grounded draft for one person. Facts in, one email out."""
         business = prospect.is_business_address
@@ -242,6 +300,9 @@ class Writer:
         if self.skills:
             prompt += "\n\n" + self.skills
 
+        first_email = self._first_email_rules(
+            "One specific observation from the FACTS above: what their own "
+            "website or Google listing shows.")
         prompt += f"""
 
 Write ONE cold email (the very first touch) to this specific person.
@@ -253,8 +314,7 @@ or anything else:
 {chr(10).join(facts)}
 
 Requirements:
-- Under 75 words. One specific observation from the FACTS above, one
-  question. No pitch, no product name.
+- {first_email}
 - {self._recipient_rule(business)}
 - Subject: lowercase, 2-5 words.
 - Follow every STRICT EMAIL RULE above.{self._call_length_rule()}
@@ -271,6 +331,11 @@ Return ONLY JSON: {{"subject": "...", "body": "..."}}"""
         subject = str(result.get("subject") or "").strip()
         body = str(result.get("body") or "").strip()
         if not subject or not body:
+            return None
+        body = self._with_booking_link(body)
+        problems = link_problems(body, configured_booking_url(self.config))
+        if problems:
+            logger.warning(f"Writer: draft for {prospect.email} dropped: {problems}")
             return None
         if business:
             body = with_greeting(body, business_greeting(prospect.company, language))
@@ -362,15 +427,20 @@ Pricing: {self.config.product.pricing}"""
         if self.skills:
             prompt += "\n\n" + self.skills
 
+        first_email = self._first_email_rules(
+            "One observation specific to these businesses (use the notes above).")
+        invitation = self._invitation_rule(website=False)
         prompt += f"""
 
 Write a 3-email cold outreach sequence for prospects like these:
 {prospect_summary}
 
 Requirements:
-- Email 1: Personalized cold observation + one question. Under 75 words. No pitch.
-- Email 2: Follow-up 3 days later. Different angle, one concrete proof point. Under 75 words.
-- Email 3: Break-up email 4 days after that. Under 40 words. Gracious, not guilt-tripping.
+- Email 1: {first_email}
+- Email 2: Follow-up 3 days later. Different angle, one concrete proof point.
+  Under 75 words. It ends with {invitation}
+- Email 3: Break-up email 4 days after that. Under 40 words. Gracious, not
+  guilt-tripping. It ends with {invitation}
 {self._merge_variable_rule(business)}
 - Never be pushy or salesy. Be consultative and value-driven.
 - Subject lines: lowercase, 2-5 words.
@@ -390,6 +460,13 @@ Return ONLY a JSON array (no markdown fences, no commentary):
             agent="writer", task="write_sequence",
         )
         steps = self._parse_sequence(result)
+        booking_url = configured_booking_url(self.config)
+        for step in steps:
+            step.body = self._with_booking_link(step.body)
+            problems = link_problems(step.body, booking_url)
+            if problems:
+                logger.warning(f"Writer: sequence step {step.step} rejected: {problems}")
+                return []
         return self._business_sequence(steps) if business else steps
 
     @staticmethod
@@ -498,3 +575,11 @@ Return ONLY a JSON array (no markdown fences, no commentary):
         # Small segments also outperform blasts on deliverability.
         cap = NATIVE_BATCH_CAP if self.is_native else LEGACY_BATCH_CAP
         return {key: group[:cap] for key, group in batches.items()}
+
+
+def _tidy(text: str) -> str:
+    """Spaces and blank lines a dropped placeholder left behind."""
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"[ \t]+(?=\n|$)", "", text)
+    text = re.sub(r"[ \t]+([.,;:!?])", r"\1", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()

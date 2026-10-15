@@ -41,6 +41,9 @@ MERGE_TAG_RE = re.compile(
 # footnote such as "[1]" is not one.
 BRACKET_PLACEHOLDER_RE = re.compile(r"\[\s*[^\W\d_][^\[\]\n]{0,40}\]")
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+# What a sentence can leave stuck to the end of a link: "…/abc123." or
+# "(…/abc123)".
+LINK_TRAILING_PUNCTUATION = ".,;:!?)]}>'\""
 # A greeting whose name rendered empty: "Hi ," or "Përshëndetje ,". A
 # greeting with no name at all ("Hello," "Përshëndetje,") is fine: that is
 # how an email to a business's own inbox opens.
@@ -50,6 +53,32 @@ EMPTY_NAME_GREETING_RE = re.compile(
 )
 
 DELIVERABLE_STATUSES = {"verified", "risky"}
+
+
+def configured_booking_url(config) -> str:
+    """The booking link from product.offer, or "" when none is set."""
+    offer = getattr(getattr(config, "product", None), "offer", None)
+    return (getattr(offer, "booking_url", "") or "").strip()
+
+
+def link_problems(body: str, booking_url: str = "") -> list[str]:
+    """Why the links in ``body`` break the link rule, if they do.
+
+    An email carries at most one link, and that link is the configured
+    booking link, exactly. A web address written as plain text
+    (example.com) is not a link here. With no booking link configured,
+    every link is one too many.
+    """
+    links = [link.rstrip(LINK_TRAILING_PUNCTUATION)
+             for link in URL_RE.findall(body or "")]
+    problems = []
+    if len(links) > MAX_LINKS:
+        problems.append(f"too many links ({len(links)} > {MAX_LINKS})")
+    booking_url = (booking_url or "").strip().rstrip(LINK_TRAILING_PUNCTUATION)
+    others = [link for link in links if link != booking_url]
+    if others:
+        problems.append(f"a link other than the booking link: {others[0][:80]}")
+    return problems
 
 
 @dataclass
@@ -68,8 +97,13 @@ def pre_send_check(
     prospect=None,
     allow_risky: bool = False,
     kind: str = "sequence",
+    booking_url: str = "",
 ) -> GateResult:
-    """Run every deterministic check. Returns ok=False with reasons on any hit."""
+    """Run every deterministic check. Returns ok=False with reasons on any hit.
+
+    ``booking_url`` is the configured booking link: the one link any email
+    may carry.
+    """
     reasons: list[str] = []
     subject = (subject or "").strip()
     body = (body or "").strip()
@@ -121,10 +155,9 @@ def pre_send_check(
     if hits:
         reasons.append(f"banned phrases: {hits[:3]}")
 
-    # Link budget: cold email with links goes to spam
-    links = URL_RE.findall(body)
-    if len(links) > MAX_LINKS:
-        reasons.append(f"too many links ({len(links)} > {MAX_LINKS})")
+    # Link budget: cold email with links goes to spam. The one link allowed
+    # is the configured booking link, exactly as configured.
+    reasons += link_problems(body, booking_url)
 
     # No HTML — Harvey sends plain text only
     if re.search(r"<\s*(html|body|div|table|img|a)\b", body, re.IGNORECASE):

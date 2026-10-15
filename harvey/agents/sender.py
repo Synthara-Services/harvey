@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from harvey.brain import Brain
 from harvey.config import HarveyConfig, EnvConfig
-from harvey.gate import pre_send_check
+from harvey.gate import configured_booking_url, pre_send_check
 from harvey.integrations.instantly import InstantlyClient
 from harvey.integrations.mail_provider import (
     NATIVE_PROVIDERS,
@@ -491,6 +491,7 @@ class Sender:
             gate = pre_send_check(
                 item["to_email"], item["subject"], item["body"],
                 prospect=prospect, allow_risky=allow_risky, kind=item["kind"],
+                booking_url=configured_booking_url(self.config),
             )
             if not gate:
                 await self.state.update_outbox_item(

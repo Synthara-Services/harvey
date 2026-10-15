@@ -14,7 +14,7 @@ Style rules are negotiable. These are not:
 - **Identity must be real.** The from-name, company, and signature must match the configured persona. Never pose as an individual consumer, a customer, or a mutual contact.
 - **Every email needs a working opt-out.** The signature with the sender's valid physical mailing address, and on first emails and follow-ups an opt-out line, are added from the configuration when the email is staged. Never write your own signature or opt-out line, and never write copy that discourages opting out.
 - **Any opt-out wording counts.** "Stop", "remove me", "not interested, don't email again" — treat all of them as unsubscribes, immediately and permanently, even mid-conversation.
-- **Deliverability hygiene:** plain text only, at most one link per email (zero in email 1 is better), no attachments, no image pixels beyond what the platform adds, no ALL-CAPS or spam-trigger phrasing ("free money", "act now", "guarantee"). One recipient's spam report costs more than a hundred sends earn.
+- **Deliverability hygiene:** plain text only, at most one link per email, and that link is the booking link you were given, no attachments, no image pixels beyond what the platform adds, no ALL-CAPS or spam-trigger phrasing ("free money", "act now", "guarantee"). One recipient's spam report costs more than a hundred sends earn.
 - **EU/UK prospects:** B2B cold email requires a defensible legitimate-interest basis — the pitch must be genuinely relevant to the person's professional role, and the first email should make it easy to object. When relevance is a stretch, don't send.
 
 ---
@@ -96,7 +96,7 @@ Encode these findings:
   nearly doubles replies versus re-pitching at length. Short > substantive
   on follow-ups.
 - **No open/click tracking on cold email.** Tracking pixels cost 8-12%
-  inbox placement. Plain text, no pixels, at most one link (zero in email 1).
+  inbox placement. Plain text, no pixels, at most one link (the booking link).
 - **Small sharp lists beat blasts.** Segments of ≤50 reply ~5.8% vs ~2.1%
   for 1,000+. This is why Scout personalizes per prospect and sends in small
   batches.

@@ -58,7 +58,8 @@ def test_ordinary_text_still_passes(kind):
         "https://calendar.example.com/book/abc123\n"
         "Our numbers come from the 2025 season [1].\n\n" + SIGNATURE
     )
-    result = pre_send_check("ana@example.org", "Re: booking flow", body, prospect(), kind=kind)
+    result = pre_send_check("ana@example.org", "Re: booking flow", body, prospect(),
+                            kind=kind, booking_url="https://calendar.example.com/book/abc123")
     assert result.ok, result.reasons
 
 
