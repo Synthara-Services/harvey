@@ -11,11 +11,13 @@ import re
 GREETING_SQ = "Përshëndetje,"
 
 # A greeting line, so one a model wrote anyway can be replaced: English
-# and Albanian (with or without ë), with or without a name after it.
+# and Albanian (with or without ë), with or without a name after it, or
+# the {{greeting}} placeholder. The word boundary belongs to the words
+# only: a line holding just {{greeting}} ends in "}}", where there is none.
 GREETING_LINE_RE = re.compile(
-    r"^\s*(\{\{\s*greeting\s*\}\}|hi|hello|hey|dear|greetings|"
+    r"^\s*(\{\{\s*greeting\s*\}\}|(hi|hello|hey|dear|greetings|"
     r"good (morning|afternoon|day)|p[eë]rsh[eë]ndetje|tungjatjeta|"
-    r"mir[eë]dita|i nderuar|e nderuar|t[eë] nderuar)\b[^\n]{0,60}$",
+    r"mir[eë]dita|i nderuar|e nderuar|t[eë] nderuar)\b)[^\n]{0,60}$",
     re.I,
 )
 
@@ -43,10 +45,11 @@ def person_greeting(first_name: str, language: str) -> str:
 
 
 def with_greeting(body: str, greeting: str) -> str:
-    """``body`` opening with ``greeting``, replacing any greeting line it
-    already had."""
+    """``body`` opening with ``greeting`` exactly once, replacing every
+    greeting line it already had at the top (a model that wrote
+    {{greeting}} and then "Përshëndetje," as well)."""
     lines = (body or "").strip().split("\n")
-    if lines and GREETING_LINE_RE.match(lines[0]):
+    while lines and GREETING_LINE_RE.match(lines[0]):
         lines = lines[1:]
         while lines and not lines[0].strip():
             lines.pop(0)
