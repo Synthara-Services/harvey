@@ -44,6 +44,7 @@ from harvey.integrations.linkedin import LinkedInAutomation
 from harvey.language import country_from_evidence, fold
 from harvey.models.company import Company
 from harvey.models.prospect import BUSINESS_EMAIL_SOURCE, Prospect
+from harvey.site_filter import icp_countries, is_brand_or_directory, is_foreign_country_domain, shows_tie
 from harvey.site_links import candidate_pages
 from harvey.state import StateManager
 
@@ -51,6 +52,9 @@ logger = logging.getLogger("harvey.scout")
 
 # Max queries per cycle to avoid rate limits
 MAX_QUERIES_PER_CYCLE = 3
+# Sources of companies the scout found on the web itself, with no city in
+# the search that found them: their site must show a tie to our countries.
+WEB_FOUND_SOURCES = ("web_search", "directory", "job_board")
 # Words that make a "name" a title or a phrase instead of a person: a
 # search snippet that starts "As Founder of ..." or "Tourism Entrepreneur"
 # must never become a prospect. Compared folded and lowercase. Countries
@@ -750,6 +754,7 @@ class Scout:
                 company_name=company.get("name") or self._domain_to_name(domain),
                 industry=company.get("industry") or default_industry,
                 source="known_company_backfill",
+                require_tie=company.get("source") in WEB_FOUND_SOURCES,
             )
 
             # Mark it checked regardless of outcome, so a company with no
@@ -1042,6 +1047,8 @@ class Scout:
                 self._seen_domains.add(domain)
 
                 info = await self._scrape_company_info(domain)
+                if not self._ties_to_our_countries(domain, [info.get("_homepage_html", "")]):
+                    continue
                 info["domain"] = domain
                 info["source"] = "web_search"
                 info["source_url"] = url
@@ -1055,10 +1062,12 @@ class Scout:
         return companies
 
     async def _find_companies_via_directories(self) -> list[dict]:
-        """Scrape industry directory sites for company names and domains.
+        """Scrape directory pages that list an industry's businesses in one
+        of our countries, for the businesses' names and domains.
 
-        These sites list companies by category and are much more reliable
-        than Google for finding ICP-matching companies.
+        Each query names an industry and a country, in the same rotation as
+        the company searches. No g2 or clutch searches: they list software
+        vendors, not local businesses.
         """
         companies = []
 
@@ -1066,13 +1075,12 @@ class Scout:
         if not industries:
             return []
 
-        directory_queries = []
-        for industry in await self._next_in_rotation("directories", list(industries), 2):
-            directory_queries.extend([
-                f'site:g2.com/categories "{industry}"',
-                f'site:clutch.co "{industry}" companies',
-                f'"{industry}" company directory list',
-            ])
+        directory_queries = [
+            f'"{industry}" "{country}" company directory list'
+            for industry, country in await self._next_in_rotation(
+                "directories", self._search_pairs(), 2)
+            if industry and country
+        ]
 
         for query in directory_queries:
             if self._queries_this_cycle >= MAX_QUERIES_PER_CYCLE:
@@ -1090,6 +1098,8 @@ class Scout:
 
                     self._seen_domains.add(domain)
                     info = await self._scrape_company_info(domain)
+                    if not self._ties_to_our_countries(domain, [info.get("_homepage_html", "")]):
+                        continue
                     info["domain"] = domain
                     info["source"] = "directory"
                     info["source_url"] = url
@@ -1110,6 +1120,13 @@ class Scout:
                             self._seen_domains.add(pd)
                             continue
                         self._seen_domains.add(pd)
+                        info = await self._scrape_company_info(pd)
+                        homepage = info.get("_homepage_html", "")
+                        if not self._ties_to_our_countries(pd, [homepage]):
+                            continue
+                        pc.update(website=info.get("website") or pc.get("website"),
+                                  description=info.get("description", ""),
+                                  _homepage_html=homepage)
                         companies.append(pc)
                         if len(companies) >= 5:
                             return companies
@@ -1117,14 +1134,29 @@ class Scout:
         return companies
 
     def _is_candidate_domain(self, domain: str) -> bool:
-        """A domain worth pursuing: real, unseen, not noise."""
+        """A domain worth pursuing: real, unseen, not noise, not a global
+        brand, aggregator or directory, not another country's domain."""
         if not domain or len(domain) < 4:
             return False
         if domain in self._seen_domains:
             return False
-        if self._is_noise_domain(domain):
+        if self._is_noise_domain(domain) or is_brand_or_directory(domain):
+            return False
+        if is_foreign_country_domain(domain, self._our_countries()):
             return False
         return True
+
+    def _our_countries(self) -> set[str] | None:
+        """ISO codes of the ICP geography, or None when it can't be read."""
+        return icp_countries(getattr(self.config.icp, "geography", None))
+
+    def _ties_to_our_countries(self, domain: str, pages: list[str]) -> bool:
+        """Whether a company's own pages show a tie to the ICP countries.
+        A company found on the web without one is not kept (#50)."""
+        if shows_tie(domain, pages, self._our_countries()):
+            return True
+        logger.debug(f"Scout: {domain} shows no tie to our countries; skipped.")
+        return False
 
     async def _scrape_directory_page(self, url: str) -> list[dict]:
         """Scrape a directory/list page for company links."""
@@ -1196,7 +1228,8 @@ class Scout:
 
         ``targets`` are (industry, country) pairs, normally the next ones in
         the rotation; without them, the first two industries in the first
-        country.
+        country. Every query names the country: with no geography there is
+        no web search, which would only find businesses anywhere (#50).
         """
         queries = []
         if targets is None:
@@ -1206,6 +1239,8 @@ class Scout:
         size = self.config.icp.company_size or ""
 
         for industry, geo in targets:
+            if not geo:
+                continue
             parts = []
             if industry:
                 parts.append(f'"{industry}"')
@@ -1601,14 +1636,17 @@ Respond ONLY with the JSON array."""
         industry: str,
         signal_note: str = "",
         source: str = "company_website",
+        require_tie: bool = False,
     ) -> list[Prospect]:
         """Team-page scrape → ICP-matched, email-resolved, deduped prospects.
 
         When the site names nobody who matches, the business's own public
         address (info@, kontakt@, a Gmail on its site) becomes the one
-        prospect for the company.
+        prospect for the company. A global brand, aggregator or directory
+        never gets one, from any source; with ``require_tie``, neither does a
+        site whose pages show no tie to our countries.
         """
-        if is_third_party_host(domain):
+        if is_third_party_host(domain) or is_brand_or_directory(domain):
             return []
         # No Reoon check left today: the company keeps zero prospects, so
         # the backfill reaches it tomorrow instead of saving unverified ones.
@@ -1618,6 +1656,8 @@ Respond ONLY with the JSON array."""
             team_members, pages = await self._crawl_site(domain)
         except Exception as e:
             logger.debug(f"Team scrape failed for {domain}: {e}")
+            return []
+        if require_tie and not self._ties_to_our_countries(domain, pages):
             return []
 
         contacts: list[Prospect] = []
@@ -1784,6 +1824,8 @@ Respond ONLY with the JSON array."""
             companies_used += 1
 
             info = await self._scrape_company_info(domain)
+            if not self._ties_to_our_countries(domain, [info.get("_homepage_html", "")]):
+                continue
             company_id = await self._ensure_company(
                 name=info.get("name") or company_name,
                 domain=domain,

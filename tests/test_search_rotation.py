@@ -94,15 +94,15 @@ async def test_each_round_searches_the_next_two_pairs(state):
 
 
 @pytest.mark.asyncio
-async def test_directory_searches_rotate_the_industries(state):
+async def test_directory_searches_rotate_industries_and_countries(state):
+    """#50: like the company searches, each directory search names a country."""
     first, second = make_scout(state), make_scout(state)
-    for scout in (first, second):
-        scout.config = SimpleNamespace(icp=SimpleNamespace(
-            industries=["tour operators", "hotels", "dental clinics"]))
     await first._find_companies_via_directories()
     await second._find_companies_via_directories()
-    assert '"tour operators"' in first.queries[0]
-    assert '"dental clinics"' in second.queries[0]
+    assert first.queries == ['"tour operators" "Albania" company directory list',
+                             '"hotels" "Albania" company directory list']
+    assert second.queries == ['"tour operators" "Kosovo" company directory list',
+                              '"hotels" "Kosovo" company directory list']
 
 
 @pytest.mark.asyncio
