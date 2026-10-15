@@ -110,6 +110,10 @@ def pre_send_check(
         reasons.append(f"unfilled placeholders: {sorted(set(leftover))[:3]}")
     if EMPTY_NAME_GREETING_RE.search(body):
         reasons.append("greeting with an empty name")
+    # The same line twice at the top: a greeting added twice.
+    top = [line.strip() for line in body.splitlines() if line.strip()][:2]
+    if len(top) == 2 and top[0].casefold() == top[1].casefold():
+        reasons.append(f"the first two lines are the same: '{top[0][:40]}'")
 
     # Banned phrases (spam triggers + AI tells)
     lowered = (subject + " " + body).lower()
