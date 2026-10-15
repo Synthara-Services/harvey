@@ -28,6 +28,15 @@ DEFAULT_TIMEOUT_SECONDS = 300  # a single Claude call should never hang forever
 DEFAULT_MAX_RETRIES = 2  # retries on transient failures (non-zero exit, timeout)
 RETRY_BASE_DELAY = 5.0  # seconds; doubles per attempt
 _MAX_ARGV_PROMPT_CHARS = 8000  # longer prompts go via stdin (Windows argv limit)
+# A call's timeout counts the time the machine slept, checked this often.
+# asyncio's own timers run on time.monotonic(), which on macOS stops while
+# the Mac sleeps: a call that started just before the lid closed got its
+# whole timeout again after waking, and ran 12 minutes with no log line (#47).
+DEADLINE_CHECK_SECONDS = 1.0
+# How long to wait for a killed CLI to be reaped. On Python 3.12 wait() also
+# waits for its pipes to close, which a child still holding them can delay
+# forever.
+KILL_WAIT_SECONDS = 5.0
 
 # stderr fragments that indicate retrying is pointless
 _NON_RETRYABLE_PATTERNS = (
@@ -78,6 +87,67 @@ class BrainUnavailable(Exception):
     a caller must leave its input untouched for a later retry."""
 
 
+class RunningCall:
+    """One model call in flight: what it is for and how long it may run."""
+
+    def __init__(self, label: str, timeout: float):
+        self.label = label
+        self.timeout = timeout
+        self.reported = False
+        self._wall = time.time()
+        self._monotonic = time.monotonic()
+
+    def elapsed(self) -> float:
+        """Seconds since the call started, counting time the machine slept.
+        The wall clock counts sleep; the monotonic clock covers the wall
+        clock being set back."""
+        return max(time.time() - self._wall, time.monotonic() - self._monotonic)
+
+    def slept(self) -> float:
+        """Seconds of the call the machine spent asleep (about)."""
+        return max(0.0, (time.time() - self._wall) - (time.monotonic() - self._monotonic))
+
+    def sleep_note(self) -> str:
+        slept = self.slept()
+        return f", {slept:.0f}s of it with the machine asleep" if slept >= 1 else ""
+
+
+async def _communicate_within(process, data, call: RunningCall):
+    """``process.communicate(data)``, cut off once ``call`` is past its timeout.
+
+    Raises asyncio.TimeoutError then, with the communicate cancelled. The
+    deadline is checked every DEADLINE_CHECK_SECONDS against
+    RunningCall.elapsed(), so a call the machine slept through is cut off
+    soon after waking.
+    """
+    reading = asyncio.ensure_future(process.communicate(data))
+    try:
+        while True:
+            remaining = call.timeout - call.elapsed()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            done, _ = await asyncio.wait(
+                {reading}, timeout=min(remaining, DEADLINE_CHECK_SECONDS))
+            if done:
+                return reading.result()
+    finally:
+        reading.cancel()
+
+
+async def _kill(process):
+    """Kill the CLI and reap it, waiting at most KILL_WAIT_SECONDS."""
+    try:
+        process.kill()
+        await asyncio.wait_for(process.wait(), KILL_WAIT_SECONDS)
+    except ProcessLookupError:
+        pass
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"The killed Claude CLI was not reaped within {KILL_WAIT_SECONDS:.0f}s. "
+            "Moving on without it."
+        )
+
+
 class Brain:
     def __init__(self, state: StateManager, brain_config=None):
         from harvey.config import BrainConfig
@@ -94,6 +164,8 @@ class Brain:
         self._usage_limited_until = 0.0
         self._usage_pause_recorded = False
         self._status_synced = False
+        # Calls in flight, for the heartbeat's watchdog (see running_calls).
+        self._running: set[RunningCall] = set()
         if self.provider == "codex":
             from harvey.codex import CodexClient, CodexQuotaClient
             self.codex = CodexClient(
@@ -217,6 +289,25 @@ class Brain:
         except Exception as e:
             logger.warning(f"Failed to record brain status: {e}")
 
+    def running_calls(self) -> list[RunningCall]:
+        """Model calls in flight right now."""
+        return list(self._running)
+
+    def overdue_calls(self, grace: float = 0.0) -> list[RunningCall]:
+        """Calls still running more than ``grace`` seconds past their
+        timeout, each returned only once."""
+        overdue = [c for c in self._running
+                   if not c.reported and c.elapsed() > c.timeout + grace]
+        for call in overdue:
+            call.reported = True
+        return overdue
+
+    def _track_call(self, agent: str, task: str, label: str, timeout: float) -> RunningCall:
+        name = "/".join(p for p in (agent, task) if p) or label or "unlabelled"
+        call = RunningCall(name, timeout)
+        self._running.add(call)
+        return call
+
     async def think(
         self,
         prompt: str,
@@ -286,6 +377,7 @@ class Brain:
                 await asyncio.sleep(delay)
 
             process = None
+            call = self._track_call(agent, task, session_id or "", timeout)
             try:
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -297,19 +389,17 @@ class Brain:
                     stderr=asyncio.subprocess.PIPE,
                 )
                 try:
-                    stdout, stderr = await asyncio.wait_for(
-                        process.communicate(
-                            prompt.encode("utf-8") if prompt_via_stdin else None
-                        ),
-                        timeout=timeout,
+                    stdout, stderr = await _communicate_within(
+                        process,
+                        prompt.encode("utf-8") if prompt_via_stdin else None,
+                        call,
                     )
                 except asyncio.TimeoutError:
-                    logger.error(f"Claude call timed out after {timeout:.0f}s. Killing process.")
-                    try:
-                        process.kill()
-                        await process.wait()
-                    except ProcessLookupError:
-                        pass
+                    logger.warning(
+                        f"Claude call ({call.label}) passed its {timeout:.0f}s timeout "
+                        f"after {call.elapsed():.0f}s{call.sleep_note()}. Killing it."
+                    )
+                    await _kill(process)
                     last_error = "timeout"
                     continue  # retry
 
@@ -361,6 +451,8 @@ class Brain:
                 logger.error(f"Brain error: {e}")
                 last_error = str(e)
                 continue
+            finally:
+                self._running.discard(call)
 
         logger.error(
             f"Brain call failed after {max_retries + 1} attempts. "
@@ -396,6 +488,7 @@ class Brain:
                     f"(attempt {attempt + 1}/{max_retries + 1})..."
                 )
                 await asyncio.sleep(delay)
+            call = self._track_call(agent, task, session_id or "", timeout)
             try:
                 result = await self.codex.run(
                     prompt, timeout=timeout, skip_if=lambda: self.paused_reason)
@@ -422,6 +515,8 @@ class Brain:
                 # CancelledError is not an Exception, so shutdown propagates.
                 logger.error(f"Codex call failed unexpectedly ({type(e).__name__}).")
                 return ""
+            finally:
+                self._running.discard(call)
 
             try:
                 await self.state.increment_usage(provider="codex")
