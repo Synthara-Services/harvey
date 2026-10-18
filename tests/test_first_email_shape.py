@@ -1,5 +1,6 @@
-"""Every first email observes, suggests and invites, in English and in
-Albanian. Follow-ups end with the same reply-or-book invitation. The
+"""Every first email observes, suggests, offers a free first version and
+invites, in English and in Albanian. Follow-ups end with the same
+reply-or-book invitation. The
 configured booking link is the only link an email carries: the model
 writes a placeholder, the writer fills in the link, and the pre-send gate
 holds any other link.
@@ -28,14 +29,18 @@ DRAFTS = {
     "en": (
         "Hotel Mira's website takes bookings only by phone or email.\n\n"
         "A site with direct booking and online payment would let guests book "
-        "at night too, and Example Co builds exactly this for hotels like yours.\n\n"
+        "at night too. If you'd like, we'll build a first version of it for "
+        "Hotel Mira at no cost, so you can see it working. If it proves useful, "
+        "we talk about price afterwards.\n\n"
         "Reply here, book a free scoping call of 30 minutes, or see example.com:\n"
         "{{booking_url}}"
     ),
     "sq": (
         "Faqja e Hotel Mira-s i merr rezervimet vetëm me telefon ose email.\n\n"
         "Një faqe me rezervim të drejtpërdrejtë dhe pagesë online do t'ju sillte "
-        "rezervime edhe natën, dhe Example Co ndërton pikërisht këtë për hotele si i juaji.\n\n"
+        "rezervime edhe natën. Nëse doni, e ndërtojmë një version të parë për "
+        "Hotel Mira pa pagesë, që ta shihni vetë si funksionon. Nëse ju duket i "
+        "dobishëm, flasim pastaj për çmimin.\n\n"
         "Më ktheni përgjigje këtu, rezervoni një telefonatë falas prej 30 minutash, "
         "ose shihni example.com:\n"
         "{{booking_url}}"
@@ -89,14 +94,17 @@ def flat(text):
 
 @pytest.mark.parametrize("country,code,name", LANGUAGES)
 @pytest.mark.asyncio
-async def test_the_first_email_prompt_asks_to_observe_suggest_and_invite(country, code, name):
+async def test_the_first_email_prompt_asks_to_observe_suggest_offer_and_invite(
+        country, code, name):
     writer, brain = make_writer(DRAFTS[code])
     await writer._write_personal_email(business(country))
     prompt = flat(brain.prompts[0])
-    assert "Under 110 words before the signature, in three parts" in prompt
+    assert "Under 110 words before the signature, in four parts" in prompt
     assert "One specific observation from the FACTS above" in prompt
     assert "concrete suggestion tied to that observation" in prompt
-    assert "Example Co builds exactly this for businesses like theirs" in prompt
+    assert ("3. In two sentences, the offer to build a first version of the "
+            "suggestion for Hotel Mira at no cost") in prompt
+    assert "builds exactly this" not in prompt
     assert "only when the product knowledge says it is live" in prompt
     assert ("reply to this email, book the free scoping call of 30 minutes at "
             "the booking link, or visit our website") in prompt
@@ -113,10 +121,11 @@ async def test_follow_ups_end_with_the_reply_or_book_invitation(country, code, n
     await writer._write_sequence([business(country)])
     prompt = flat(brain.prompts[0])
     assert "- Email 1: Under 110 words before the signature" in prompt
-    invitation = ("It ends with one invitation naming every way in: reply to this "
-                  "email, or book the free scoping call of 30 minutes at the "
-                  "booking link.")
+    invitation = ("one invitation naming every way in: reply to this email, or "
+                  "book the free scoping call of 30 minutes at the booking link.")
     assert prompt.count(invitation) == 2, "email 2 and email 3"
+    assert f"It ends with {invitation}" in prompt, "email 2"
+    assert f"still stands), then {invitation}" in prompt, "email 3, after the offer"
     assert f"Write all three emails in {name}" in prompt
     assert BOOKING_URL not in prompt
 
