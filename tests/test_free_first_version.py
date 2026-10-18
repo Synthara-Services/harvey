@@ -158,6 +158,19 @@ def test_the_writer_prompt_has_one_rule_for_free():
     assert 'no "guarantee", no pressure' in rule
 
 
+def test_prompts_and_skills_are_read_as_utf8(tmp_path, monkeypatch):
+    """The Albanian offer reaches the model as written on every platform,
+    Windows included, where the default encoding is not UTF-8."""
+    import harvey.brain as brain_module
+    text = f"{OFFERS['sq']} — çmimi"
+    (tmp_path / "offer.md").write_bytes(text.encode("utf-8"))
+    monkeypatch.setattr(brain_module, "PROMPTS_DIR", tmp_path)
+    monkeypatch.setattr(brain_module, "SKILLS_DIR", tmp_path)
+    brain = RecordingBrain()
+    assert brain.load_prompt("offer") == text
+    assert brain.load_skill("offer") == text
+
+
 # ── the rendered emails ──
 
 
