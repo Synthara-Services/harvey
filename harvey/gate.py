@@ -26,6 +26,13 @@ BANNED_PHRASES = (
     "as a language model",
 )
 
+# Words for free of charge, in English and Albanian. The body may offer
+# the free first version and the free scoping call; a subject that says
+# "free" reads as spam, so it never carries one.
+FREE_WORDS_RE = re.compile(
+    r"\b(?:free|no cost|no charge|gratis|falas|pa pages[eë]|pa kosto)\b", re.IGNORECASE
+)
+
 MAX_SUBJECT_LEN = 90
 MAX_BODY_WORDS = 220        # hard ceiling; sequences aim far lower
 MAX_LINKS = 1
@@ -79,6 +86,12 @@ def link_problems(body: str, booking_url: str = "") -> list[str]:
     if others:
         problems.append(f"a link other than the booking link: {others[0][:80]}")
     return problems
+
+
+def free_word(subject: str) -> str:
+    """The first word for free of charge in a subject line, or ""."""
+    match = FREE_WORDS_RE.search(subject or "")
+    return match.group(0) if match else ""
 
 
 @dataclass
@@ -148,6 +161,11 @@ def pre_send_check(
     top = [line.strip() for line in body.splitlines() if line.strip()][:2]
     if len(top) == 2 and top[0].casefold() == top[1].casefold():
         reasons.append(f"the first two lines are the same: '{top[0][:40]}'")
+
+    # A reply's subject is the prospect's own, so only ours are checked.
+    word = free_word(subject) if kind != "reply" else ""
+    if word:
+        reasons.append(f"a word for free in the subject: '{word}'")
 
     # Banned phrases (spam triggers + AI tells)
     lowered = (subject + " " + body).lower()

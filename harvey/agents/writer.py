@@ -21,9 +21,9 @@ from harvey.integrations.mail_provider import (
     outreach_footer,
     with_footer,
 )
-from harvey.gate import configured_booking_url, link_problems
+from harvey.gate import configured_booking_url, free_word, link_problems
 from harvey.greeting import business_greeting, with_greeting
-from harvey.language import LANGUAGE_NAMES, language_for_country
+from harvey.language import ALBANIAN, ENGLISH, LANGUAGE_NAMES, language_for_country
 from harvey.models.campaign import Campaign, EmailStep
 from harvey.state import DELIVERABLE_EMAIL_STATUSES, StateManager
 
@@ -38,6 +38,18 @@ LEGACY_BATCH_CAP = 50
 # itself, so the link reaches the email exactly as configured.
 BOOKING_PLACEHOLDER = "{{booking_url}}"
 BOOKING_PLACEHOLDER_RE = re.compile(r"\{\{\s*booking_url\s*\}\}")
+
+# Every sequence offers to build a first version of the suggestion for the
+# business at no cost, so they see it working before any talk of price. The
+# model adapts these words to each email; the meaning stays.
+FIRST_VERSION_OFFER = {
+    ALBANIAN: ("Nëse doni, e ndërtojmë një version të parë për {name} pa pagesë, "
+               "që ta shihni vetë si funksionon. Nëse ju duket i dobishëm, flasim "
+               "pastaj për çmimin."),
+    ENGLISH: ("If you'd like, we'll build a first version of this for {name} at no "
+              "cost, so you can see it working. If it proves useful, we talk about "
+              "price afterwards."),
+}
 
 
 class Writer:
@@ -220,21 +232,32 @@ class Writer:
                     "it, exactly as written: it becomes the booking link.")
         return f"{rule} No booking link is configured: write no link."
 
-    def _first_email_rules(self, observation: str) -> str:
-        """Every first email observes, suggests and invites, in that order."""
+    @staticmethod
+    def _offer(name: str, language: str) -> str:
+        """The free first version, and the words to adapt for it. ``name``
+        is the business, or {{company}} in a sequence."""
+        words = FIRST_VERSION_OFFER.get(language, FIRST_VERSION_OFFER[ENGLISH])
+        return (f"the offer to build a first version of the suggestion for {name} at "
+                "no cost, so they can see it working before any talk of price, and "
+                "to talk about the price together only if they find it useful. "
+                f"Close to: \"{words.format(name=name)}\" Adapt the words to the "
+                "email; the meaning stays.")
+
+    def _first_email_rules(self, observation: str, name: str, language: str) -> str:
+        """Every first email observes, suggests, offers a free first version
+        of the suggestion and invites, in that order."""
         invitation = self._invitation_rule(website=True)
-        return f"""Under 110 words before the signature, in three parts, in this order:
+        return f"""Under 110 words before the signature, in four parts, in this order:
   1. {observation}
   2. One sentence with a concrete suggestion tied to that observation (for
      example a website with direct booking and online payment, an online
      shop that takes orders on WhatsApp, a mobile app, or an automation of
-     manual work), saying that {self.config.persona.company} builds exactly
-     this for businesses like theirs. Name one of our products only when
-     the product knowledge says it is live and it matches the suggestion.
-     When none matches, name none: the suggestion and that
-     {self.config.persona.company} builds exactly this stand on their own.
-     Past projects are examples, never a limit on who we work with.
-  3. {invitation[0].upper()}{invitation[1:]}
+     manual work). Name one of our products only when the product knowledge
+     says it is live and it matches the suggestion. When none matches, name
+     none: the suggestion stands on its own. Past projects are examples,
+     never a limit on who we work with.
+  3. In two sentences, {self._offer(name, language)}
+  4. {invitation[0].upper()}{invitation[1:]}
   No number you were not given, no competitor names, no other link."""
 
     def _with_booking_link(self, body: str) -> str:
@@ -305,7 +328,7 @@ class Writer:
 
         first_email = self._first_email_rules(
             "One specific observation from the FACTS above: what their own "
-            "website or Google listing shows.")
+            "website or Google listing shows.", prospect.company, language)
         prompt += f"""
 
 Write ONE cold email (the very first touch) to this specific person.
@@ -337,6 +360,8 @@ Return ONLY JSON: {{"subject": "...", "body": "..."}}"""
             return None
         body = self._with_booking_link(body)
         problems = link_problems(body, configured_booking_url(self.config))
+        if free_word(subject):
+            problems.append(f"a word for free in the subject: '{free_word(subject)}'")
         if problems:
             logger.warning(f"Writer: draft for {prospect.email} dropped: {problems}")
             return None
@@ -430,8 +455,11 @@ Pricing: {self.config.product.pricing}"""
         if self.skills:
             prompt += "\n\n" + self.skills
 
+        language = self._language_of(prospects)
+        company = "{{company}}"
         first_email = self._first_email_rules(
-            "One observation specific to these businesses (use the notes above).")
+            "One observation specific to these businesses (use the notes above).",
+            company, language)
         invitation = self._invitation_rule(website=False)
         prompt += f"""
 
@@ -440,15 +468,19 @@ Write a 3-email cold outreach sequence for prospects like these:
 
 Requirements:
 - Email 1: {first_email}
-- Email 2: Follow-up 3 days later. Different angle, one concrete proof point.
-  Under 75 words. It ends with {invitation}
+- Email 2: Follow-up 3 days later. Different angle: one past project of ours
+  from the product knowledge as the example, the one closest to their
+  business, as one concrete proof point. Then the offer from email 1 again
+  in one sentence: a first version for {company} at no cost, and the price
+  only if it proves useful. Under 75 words. It ends with {invitation}
 - Email 3: Break-up email 4 days after that. Under 40 words. Gracious, not
-  guilt-tripping. It ends with {invitation}
+  guilt-tripping. It ends with the offer in one line (the first version for
+  {company} at no cost still stands), then {invitation}
 {self._merge_variable_rule(business)}
 - Never be pushy or salesy. Be consultative and value-driven.
 - Subject lines: lowercase, 2-5 words.
 - Follow every rule in the STRICT EMAIL RULES above. No exceptions.{self._call_length_rule()}
-- Write all three emails in {LANGUAGE_NAMES[self._language_of(prospects)]}. Keep the merge
+- Write all three emails in {LANGUAGE_NAMES[language]}. Keep the merge
   variables exactly as written.
 
 Return ONLY a JSON array (no markdown fences, no commentary):
@@ -467,6 +499,8 @@ Return ONLY a JSON array (no markdown fences, no commentary):
         for step in steps:
             step.body = self._with_booking_link(step.body)
             problems = link_problems(step.body, booking_url)
+            if free_word(step.subject):
+                problems.append(f"a word for free in the subject: '{free_word(step.subject)}'")
             if problems:
                 logger.warning(f"Writer: sequence step {step.step} rejected: {problems}")
                 return []
