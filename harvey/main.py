@@ -8,6 +8,7 @@ from datetime import datetime, time, timedelta
 
 import pytz
 
+from harvey import single_instance
 from harvey.brain import Brain
 from harvey.config import ConfigError, load_config, load_env, HarveyConfig
 from harvey.pipeline import run_profile_stage
@@ -214,6 +215,16 @@ async def heartbeat(stop_event: asyncio.Event | None = None):
 
     await state.init_db()
     logger.info("Database initialized.")
+
+    # main() holds the single-instance lock, so no other Harvey is sending:
+    # a row still marked 'sending' was cut off mid-send by the last run. It
+    # may or may not have gone out, so it is never sent again on its own.
+    for item in await state.fail_interrupted_sends():
+        logger.warning(
+            f"Outbox: step {item['step']} to {item['to_email']} was interrupted "
+            "while sending and is marked failed. It may or may not have gone "
+            "out: check the Sent folder."
+        )
 
     # Import agents here to avoid circular imports
     from harvey.agents.scout import Scout
@@ -452,9 +463,16 @@ def main():
         return
 
     try:
+        lock = single_instance.acquire()
+    except single_instance.AlreadyRunning as e:
+        print(f"\n  {e}\n", file=sys.stderr)
+        sys.exit(1)
+    try:
         asyncio.run(_run_with_signals())
     except KeyboardInterrupt:
         logger.info("Goodbye.")
+    finally:
+        single_instance.release(lock)
 
 
 if __name__ == "__main__":

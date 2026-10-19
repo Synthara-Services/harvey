@@ -22,6 +22,7 @@ from fastapi.responses import (
 logger = logging.getLogger("harvey.dashboard")
 
 from harvey.paths import DATA_DIR, PROJECT_ROOT, SKILLS_DIR  # noqa: E402
+from harvey import single_instance  # noqa: E402
 DB_PATH = DATA_DIR / "harvey.db"
 ENV_FILE = PROJECT_ROOT / ".env"
 CONFIG_FILE = PROJECT_ROOT / "harvey.yaml"
@@ -440,6 +441,13 @@ async def start_harvey():
 
     if _check_harvey_pid():
         return {"success": False, "message": "Harvey is already running."}
+    # A harvey run started from a terminal holds the single-instance lock.
+    running = single_instance.holder()
+    if running is not None:
+        pid = f" (PID {running})" if running else ""
+        return {"success": False, "message": (
+            f"Harvey is already running{pid} from a terminal. Stop it there "
+            "(Ctrl+C) before starting it here.")}
 
     # Ensure data dir exists
     DATA_DIR.mkdir(parents=True, exist_ok=True)

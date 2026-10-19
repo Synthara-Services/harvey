@@ -821,6 +821,8 @@ class StateManager:
             await db.commit()
 
     # ── Outbox (approval ladder + native sending) ──
+    # pending_review -> approved -> sending -> sent, or rejected / cancelled /
+    # failed. 'sending' means a sender has claimed the row (claim_outbox_item).
 
     async def add_outbox_item(
         self,
@@ -924,6 +926,40 @@ class StateManager:
                 )
             await db.commit()
             return cursor.rowcount
+
+    INTERRUPTED_SEND = ("interrupted while sending: it may or may not have gone "
+                        "out, check the Sent folder")
+
+    async def claim_outbox_item(self, item_id: str) -> bool:
+        """Takes an approved row for sending: approved -> sending. Only one
+        caller wins it, so of two senders that read the same row, one sends
+        it and the other gets False and leaves it alone."""
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE outbox SET status = 'sending', updated_at = ? "
+                "WHERE id = ? AND status = 'approved'",
+                (_utcnow().isoformat(), item_id),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def fail_interrupted_sends(self) -> list[dict]:
+        """Rows still 'sending' when Harvey starts were cut off mid-send by
+        the last run. They may have gone out, so each is marked failed with
+        a note, never sent again on its own. Returns the rows."""
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM outbox WHERE status = 'sending'"
+            ) as cursor:
+                rows = [dict(r) for r in await cursor.fetchall()]
+            await db.execute(
+                "UPDATE outbox SET status = 'failed', error = ?, updated_at = ? "
+                "WHERE status = 'sending'",
+                (self.INTERRUPTED_SEND, _utcnow().isoformat()),
+            )
+            await db.commit()
+        return rows
 
     async def cancel_pending_outbox_for_prospect(
         self, prospect_id: str, reason: str = "stop_on_reply"
