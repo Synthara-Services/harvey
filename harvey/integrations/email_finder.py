@@ -189,7 +189,8 @@ async def _hunter_domain_pattern(domain: str, api_key: str) -> Optional[tuple[st
         async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
             resp = await client.get(
                 "https://api.hunter.io/v2/domain-search",
-                params={"domain": domain, "api_key": api_key, "limit": 1},
+                params={"domain": domain, "limit": 1},
+                headers={"X-API-KEY": api_key},
             )
     except httpx.HTTPError as e:
         logger.debug(f"Hunter domain-search failed for {domain}: {e}")
@@ -301,7 +302,8 @@ async def hunter_domain_people(
         async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
             resp = await client.get(
                 "https://api.hunter.io/v2/domain-search",
-                params={"domain": domain, "api_key": api_key, "limit": limit},
+                params={"domain": domain, "limit": limit},
+                headers={"X-API-KEY": api_key},
             )
     except httpx.HTTPError as e:
         logger.debug(f"Hunter domain-search failed for {domain}: {e}")
@@ -359,6 +361,9 @@ async def derive_pattern(
 async def verify_reoon(email: str, api_key: str) -> Optional[dict]:
     """Reoon email-verifier — generous free tier, good catch-all flagging.
 
+    Reoon takes the key only in the URL: harvey.redact keeps it out of
+    httpx's request log line.
+
     Returns {'status', 'catch_all', 'deliverable', 'safe_to_send'} or None
     if unavailable. Power mode's statuses (Reoon API docs): safe / invalid /
     disabled / disposable / inbox_full / catch_all / role_account /
@@ -393,7 +398,11 @@ async def verify_reoon(email: str, api_key: str) -> Optional[dict]:
 
 
 async def verify_zerobounce(email: str, api_key: str) -> Optional[dict]:
-    """ZeroBounce — its 2026 engine is the reliable one for M365/Workspace catch-alls."""
+    """ZeroBounce — its 2026 engine is the reliable one for M365/Workspace catch-alls.
+
+    ZeroBounce takes the key only in the URL: harvey.redact keeps it out of
+    httpx's request log line.
+    """
     try:
         async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
             resp = await client.get(
@@ -421,7 +430,8 @@ async def verify_hunter(email: str, api_key: str) -> Optional[dict]:
         async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
             resp = await client.get(
                 "https://api.hunter.io/v2/email-verifier",
-                params={"email": email, "api_key": api_key},
+                params={"email": email},
+                headers={"X-API-KEY": api_key},
             )
     except httpx.HTTPError as e:
         logger.debug(f"Hunter verify failed for {email}: {e}")

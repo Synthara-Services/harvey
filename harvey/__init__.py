@@ -16,4 +16,9 @@ if sys.version_info < (3, 11):  # pragma: no cover - version guard
         f"    source .venv/bin/activate && pip install -e ."
     )
 
+# Before any request is made: an API key in a URL never reaches a log line.
+from harvey.redact import install_log_redaction  # noqa: E402
+
+install_log_redaction()
+
 """Harvey — Autonomous Sales Agent. Always Be Closing."""
