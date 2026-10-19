@@ -22,6 +22,7 @@ from harvey.gate import configured_booking_url, pre_send_check
 from harvey.integrations.instantly import InstantlyClient
 from harvey.integrations.mail_provider import (
     NATIVE_PROVIDERS,
+    SendResult,
     get_mail_provider,
     outreach_footer,
     with_footer,
@@ -473,6 +474,12 @@ class Sender:
             if sent >= budget:
                 break
 
+            # Taken before anything else: if another sender read the same
+            # row, only one of us wins it, so a row is sent at most once.
+            # From here every path ends the row as sent, failed or cancelled.
+            if not await self.state.claim_outbox_item(item["id"]):
+                continue
+
             prospect = await self.state.get_prospect(item["prospect_id"])
             if prospect is None:
                 await self.state.update_outbox_item(
@@ -504,11 +511,15 @@ class Sender:
                 )
                 continue
 
-            result = await self.provider.send_email(
-                item["to_email"], item["subject"], item["body"],
-                thread_ref=item.get("thread_ref", ""),
-                in_reply_to=item.get("in_reply_to", ""),
-            )
+            try:
+                result = await self.provider.send_email(
+                    item["to_email"], item["subject"], item["body"],
+                    thread_ref=item.get("thread_ref", ""),
+                    in_reply_to=item.get("in_reply_to", ""),
+                )
+            except Exception as e:  # never leave a claimed row 'sending'
+                logger.error(f"Sender: sending to {item['to_email']} raised: {e}")
+                result = SendResult(ok=False, error=f"send raised: {e}")
             if not result.ok:
                 await self.state.update_outbox_item(
                     item["id"], status="failed", error=result.error[:300]
